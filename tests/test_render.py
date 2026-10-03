@@ -98,3 +98,19 @@ def test_generated_pipeline_render(tmp_path):
     r = run_script("render_drawio", f, "-o", out)
     assert r.returncode == 0
     ET.parse(str(out))
+
+
+def test_edge_with_missing_endpoint_skipped(tmp_path):
+    # regression: an edge without source/target used to crash the renderer
+    out = tmp_path / "ms.svg"
+    r = render("edge_missing_source.drawio", out=out)
+    assert r.returncode == 0
+    ET.parse(str(out))
+
+
+def test_page_select_drops_crosspage_edge(tmp_path):
+    # an edge referencing a cell on another page is skipped, not a crash
+    out = tmp_path / "cp.svg"
+    r = render("multipage_crossref.drawio", "--page", "1", out=out)
+    assert r.returncode == 0
+    ET.parse(str(out))

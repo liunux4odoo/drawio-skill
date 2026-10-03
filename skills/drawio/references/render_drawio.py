@@ -332,6 +332,8 @@ class Renderer:
 
     # ---- edge rendering ---------------------------------------------------
     def anchor(self, cid: str, style: dict, is_source: bool):
+        if cid is None or cid not in self.cells:
+            return None
         g = self.abs_geom(cid)
         if g is None:
             return None
