@@ -3,7 +3,8 @@
 
 Fallback when the draw.io CLI / container / browser viewer is unavailable.
 Renders the basic shapes the drawio skill uses (rect, rounded, rhombus,
-ellipse, swimlane, text) and orthogonal edges with arrows and waypoints.
+ellipse, swimlane, cylinder, hexagon, parallelogram, text) and orthogonal
+edges with arrows and waypoints.
 
 This is an APPROXIMATION of draw.io rendering — HTML labels, fonts, and
 complex shapes (cylinders, clouds, icons) will not be pixel-identical. It is
@@ -48,6 +49,12 @@ def parse_style(style: str) -> dict[str, str]:
         else:
             d[tok] = "1"
     return d
+
+
+def has_shape(style: dict[str, str], name: str) -> bool:
+    """True when `name` is the shape, written either as `shape=name` or as a
+    bare style token — both spellings are legal in draw.io style strings."""
+    return style.get("shape") == name or name in style
 
 
 def unescape(value: str | None) -> str:
@@ -263,22 +270,22 @@ class Renderer:
         if "text" in st:
             body.extend(self.text_el(x, y, w, h, c["value"], st))
             return
-        if "rhombus" in st:
+        if has_shape(st, "rhombus"):
             cx, cy = x + w / 2, y + h / 2
             pts = f"{cx},{y} {x + w},{cy} {cx},{y + h} {x},{cy}"
             body.append(f'<polygon points="{pts}" {common}/>')
-        elif "ellipse" in st:
+        elif has_shape(st, "ellipse"):
             body.append(f'<ellipse cx="{x + w / 2}" cy="{y + h / 2}" rx="{w / 2}" '
                         f'ry="{h / 2}" {common}/>')
-        elif "parallelogram" in st:
+        elif has_shape(st, "parallelogram"):
             skew = min(w * 0.15, 24)
             pts = f"{x + skew},{y} {x + w},{y} {x + w - skew},{y + h} {x},{y + h}"
             body.append(f'<polygon points="{pts}" {common}/>')
-        elif "hexagon" in st:
+        elif has_shape(st, "hexagon"):
             cx = x + w / 2
             pts = f"{cx},{y} {x + w},{y + h * 0.5} {cx},{y + h} {x},{y + h * 0.5}"
             body.append(f'<polygon points="{pts}" {common}/>')
-        elif "cylinder3" in st:
+        elif has_shape(st, "cylinder3"):
             r = min(w, h) * 0.15
             body.append(f'<path d="M {x},{y + r} L {x},{y + h - r} A {r} {r} 0 0 0 '
                         f"{x + w},{y + h - r} L {x + w},{y + r} A {r} {r} 0 0 0 "
@@ -322,14 +329,20 @@ class Renderer:
             return (x + w / 2, y + h)
         return (x + w / 2, y)
 
-    def draw_edge(self, cid: str) -> None:
+    def edge_points(self, cid: str) -> list[tuple[float, float]] | None:
+        """Polyline for an edge: anchors + waypoints (+ orthogonal bend).
+
+        Reuses the same anchor rule and single-bend L routing as
+        verify_diagram.py's edge geometry, so the rendered path and the
+        checked path agree. Returns None when an endpoint has no geometry.
+        """
         c = self.cells[cid]
         st = c["style"]
         s, t = c["source"], c["target"]
         p0 = self.anchor(s, st, True)
         p1 = self.anchor(t, st, False)
         if p0 is None or p1 is None:
-            return
+            return None
         pts = [p0] + c["points"] + [p1]
         if not c["points"] and st.get("edgeStyle") == "orthogonalEdgeStyle":
             # single-bend L route
@@ -337,6 +350,14 @@ class Renderer:
                 pts = [p0, (p1[0], p0[1]), p1]
             else:
                 pts = [p0, (p0[0], p1[1]), p1]
+        return pts
+
+    def draw_edge(self, cid: str) -> None:
+        c = self.cells[cid]
+        st = c["style"]
+        pts = self.edge_points(cid)
+        if pts is None:
+            return
         d = " ".join(f"L {px:.1f} {py:.1f}" for px, py in pts[1:])
         color = st.get("strokeColor", DEFAULT_STROKE)
         sw = st.get("strokeWidth", "1")
@@ -346,7 +367,7 @@ class Renderer:
             attrs += f' marker-end="url(#m-{self.marker(color)})"'
         if st.get("startArrow") not in (None, "", "none"):
             attrs += f' marker-start="url(#m-{self.marker(color, reverse=True)})"'
-        self.body.append(f'<path d="M {p0[0]:.1f} {p0[1]:.1f} {d}" {attrs}/>')
+        self.body.append(f'<path d="M {pts[0][0]:.1f} {pts[0][1]:.1f} {d}" {attrs}/>')
         if c["value"]:
             mx = sum(p[0] for p in pts) / len(pts)
             my = sum(p[1] for p in pts) / len(pts)
@@ -356,6 +377,30 @@ class Renderer:
 
     # ---- output ----------------------------------------------------------
     def render(self) -> str:
+        # Bounds first: vertex rectangles plus every edge's actual anchors and
+        # waypoints (a detour may run far outside the vertex bounding box).
+        xs: list[float] = []
+        ys: list[float] = []
+        xe: list[float] = []
+        ye: list[float] = []
+        for cid in list(self.cells):
+            c = self.cells[cid]
+            if c["vertex"]:
+                g = self.abs_geom(cid)
+                if g is not None:
+                    xs.append(g[0])
+                    ys.append(g[1])
+                    xe.append(g[0] + g[2])
+                    ye.append(g[1] + g[3])
+            elif c["edge"]:
+                pts = self.edge_points(cid)
+                if pts:
+                    for px, py in pts:
+                        xs.append(px)
+                        ys.append(py)
+                        xe.append(px)
+                        ye.append(py)
+        # Draw afterwards so vertices and edges keep their original order.
         for cid in list(self.cells):
             c = self.cells[cid]
             if c["vertex"]:
@@ -364,20 +409,16 @@ class Renderer:
                     self.draw_vertex(cid, g)
             elif c["edge"]:
                 self.draw_edge(cid)
-        xs = [g[0] for g in (self.abs_geom(i) for i in self.cells) if g]
-        ys = [g[1] for g in (self.abs_geom(i) for i in self.cells) if g]
-        xe = [g[0] + g[2] for g in (self.abs_geom(i) for i in self.cells) if g]
-        ye = [g[1] + g[3] for g in (self.abs_geom(i) for i in self.cells) if g]
         if not xs:
             return "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'/>"
         pad = 20
         x0, y0 = min(xs) - pad, min(ys) - pad
         x1, y1 = max(xe) + pad, max(ye) + pad
-        defs = ("<defs>" + "".join(self.defs) + "</defs>") if self.defs else ""
+        defs = ("<defs>" + "\n".join(self.defs) + "</defs>") if self.defs else ""
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{x1 - x0}" height="{y1 - y0}" '
-            f'viewBox="{x0} {y0} {x1 - x0} {y1 - y0}" font-family="sans-serif">'
-            f"{defs}" + "".join(self.body) + "</svg>"
+            f'viewBox="{x0} {y0} {x1 - x0} {y1 - y0}" font-family="sans-serif">\n'
+            f"{defs}\n" + "\n".join(self.body) + "\n</svg>"
         )
 
 

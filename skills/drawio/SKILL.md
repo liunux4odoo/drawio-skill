@@ -215,7 +215,7 @@ The §8.1 checklist always runs. If your model can see images, **add** a rendere
 
 1. **Render to an image.** Use whatever renderer is available:
    - Prefer the draw.io CLI (`drawio --export --format png --output out.png file.drawio`) or a draw.io container image when installed.
-   - **No draw.io CLI?** Use the bundled stdlib-only SVG exporter — it renders the basic shapes this skill produces (rect, rounded, rhombus, ellipse, swimlane, orthogonal edges with arrows) and is sufficient for this layout check:
+   - **No draw.io CLI?** Use the bundled stdlib-only SVG exporter — it renders the basic shapes this skill produces (rect, rounded, rhombus, ellipse, swimlane, cylinder, hexagon, parallelogram, orthogonal edges with arrows) and is sufficient for this layout check:
      ```bash
      python3 references/render_drawio.py file.drawio -o out.svg
      python3 references/render_drawio.py file.drawio --png   # needs pip install cairosvg
