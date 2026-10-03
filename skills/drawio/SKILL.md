@@ -202,10 +202,10 @@ Run this after every create **and** every edit, before reporting done:
 3. All cell ids unique.
 4. Every edge `source`/`target` references an existing vertex id; every child `parent` references an existing container id.
 5. No two shapes overlap and gaps are ≥40px.
-6. No edge crosses a shape other than its source/target.
- 7. All coordinates and sizes are non-negative; children stay inside their containers (and below swimlane headers); everything fits on the page.
- 8. No label overflows its shape — `verify_diagram.py` reports this as a warning (horizontal when `whiteSpace=wrap` is off, vertical when too many wrapped lines); `--strict` promotes it to an error.
- 9. Unrelated cells, pages, styles, and page attributes were preserved during edits.
+6. No edge crosses a shape other than its source/target (curved edges are reported as a warning instead — crossing cannot be judged mechanically).
+7. All coordinates and sizes are non-negative; children stay inside their containers (and below swimlane headers); everything fits on the page.
+8. No label overflows its shape — `verify_diagram.py` reports this as a warning (horizontal when a line is wider than the shape, including over-long unbroken runs such as CJK text that draw.io clips even with `whiteSpace=wrap`, vertical when too many wrapped lines); `--strict` promotes it to an error.
+9. Unrelated cells, pages, styles, and page attributes were preserved during edits.
 10. The user's requested labels/values are exact (respect language, casing, and special chars).
 11. Re-read the final file once more before reporting done.
 

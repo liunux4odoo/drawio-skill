@@ -6,6 +6,12 @@ invariants from the drawio skill: well-formed XML, valid structure, and clean
 geometry (no overlaps, no edges crossing unrelated shapes, children inside
 containers, everything on-page).
 
+Multi-page files are checked page by page: each <diagram> owns its own root
+cells (id="0"/"1"), its own page geometry, and its own coordinate space.
+References (edge source/target, cell parent) never cross pages. Compressed /
+encoded payloads (base64 diagram bodies) get a dedicated error instead of a
+confusing "missing root cell" message.
+
 Exit codes: 0 = no errors (warnings allowed), 1 = errors found, 2 = usage/file error.
 
 Usage:
@@ -18,6 +24,7 @@ import argparse
 import math
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 from html import unescape as hunescape
 
@@ -26,9 +33,8 @@ DEFAULT_PAGE = (827, 1169)  # draw.io A4 portrait
 INSET_WARN = 20  # children should be >= 20px inside a container
 HEADER_WARN = 40  # swimlane children should sit below the title bar
 
-# Text-fit heuristics. CHAR_W_FACTOR and LINE_H_FACTOR mirror
-# render_drawio.py so the two tools agree on what "fits".
-CHAR_W_FACTOR = 0.6   # average glyph width, em units
+# Text-fit heuristics. char_width() and wrap_label() mirror render_drawio.py
+# (see the matching functions there) so the two tools agree on what "fits".
 LINE_H_FACTOR = 1.2   # line height, em units
 H_PAD = 12            # total horizontal padding in the label area, px
 V_PAD = 8             # total vertical padding in the label area, px
@@ -58,6 +64,48 @@ def parse_style(style: str) -> dict[str, str]:
     return d
 
 
+def char_width(ch: str) -> float:
+    """Approximate glyph width in em units.
+
+    East Asian wide/full/ambiguous characters (CJK, full-width punctuation) are
+    ~1.0em wide; everything else is estimated at 0.6em (Latin average). Shared
+    rule with render_drawio.py — keep both in sync.
+    """
+    return 1.0 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 0.6
+
+
+def wrap_label(line: str, size: float, avail_w: float) -> list[str]:
+    """Break `line` into display lines by word boundaries.
+
+    Words are maximal runs of non-space characters, packed greedily so each
+    line's width (per-char widths, East Asian aware) stays within avail_w. A
+    single word wider than the box is kept whole so it overflows — draw.io
+    wraps at spaces and clips an over-long unbroken run. Mirrors
+    render_drawio.py's wrap logic.
+    """
+    if line == "":
+        return [""]
+    cap_em = (avail_w / size) if size > 0 else 0.0
+    out: list[str] = []
+    cur = ""
+    cur_em = 0.0
+    for word in line.split(" "):
+        w_em = sum(char_width(ch) for ch in word)
+        if cur and cur_em + char_width(" ") + w_em > cap_em:
+            out.append(cur)
+            cur = word
+            cur_em = w_em
+        elif cur:
+            cur = f"{cur} {word}"
+            cur_em = cur_em + char_width(" ") + w_em
+        else:
+            cur = word
+            cur_em = w_em
+    if cur:
+        out.append(cur)
+    return out
+
+
 def text_fit_warning(cid: str, value: str, style: dict[str, str],
                      w: float, h: float) -> str | None:
     """Return a warning if the label may overflow its shape, else None."""
@@ -65,30 +113,26 @@ def text_fit_warning(cid: str, value: str, style: dict[str, str],
         return None
     size = float(style.get("fontSize", "12") or "12")
     wrap = style.get("whiteSpace") == "wrap"
-    char_w = size * CHAR_W_FACTOR
     avail_w = max(w - H_PAD, 10.0)
+    avail_h = max(h - V_PAD, 4.0)
     raw_lines = value.split("\n")
-
     if wrap:
-        per_line = max(int(avail_w // char_w), 4)
         lines: list[str] = []
         for ln in raw_lines:
-            while len(ln) > per_line:
-                lines.append(ln[:per_line])
-                ln = ln[per_line:]
-            lines.append(ln)
+            lines.extend(wrap_label(ln, size, avail_w))
     else:
         lines = raw_lines
 
-    widest = max((len(ln) for ln in lines), default=0)
-    if widest * char_w > avail_w + 1.0:
+    widest = 0.0
+    for ln in lines:
+        widest = max(widest, sum(char_width(ch) for ch in ln) * size)
+    if widest > avail_w + 1.0:
         return (
             f"label of {cid!r} may overflow its box horizontally "
-            f"(~{widest * char_w:.0f}px text vs {avail_w:.0f}px available); "
+            f"(~{widest:.0f}px text vs {avail_w:.0f}px available); "
             f"widen the shape or enable whiteSpace=wrap"
         )
     need_h = len(lines) * size * LINE_H_FACTOR
-    avail_h = max(h - V_PAD, 4.0)
     if need_h > avail_h + 1.0:
         return (
             f"label of {cid!r} may overflow its box vertically "
@@ -113,18 +157,6 @@ def parse_args() -> argparse.Namespace:
         help="treat warnings (e.g. label overflow) as errors",
     )
     return ap.parse_args()
-
-
-class Report:
-    def __init__(self) -> None:
-        self.errors: list[str] = []
-        self.warnings: list[str] = []
-
-    def error(self, msg: str) -> None:
-        self.errors.append(msg)
-
-    def warn(self, msg: str) -> None:
-        self.warnings.append(msg)
 
 
 def rect_gap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
@@ -168,35 +200,80 @@ def seg_rect_intersect(p0: tuple[float, float], p1: tuple[float, float],
     return True
 
 
-def main() -> int:
-    args = parse_args()
-    rep = Report()
-
-    try:
-        tree = ET.parse(args.file)
-    except ET.ParseError as exc:
-        print(f"ERROR: not well-formed XML: {exc}")
-        return 1
-    except OSError as exc:
-        print(f"ERROR: cannot read file: {exc}")
-        return 2
-
-    root = tree.getroot()
-
-    # ---- page geometry -------------------------------------------------
-    page_w, page_h = DEFAULT_PAGE
-    page_flag = True
-    for el in root.iter():
-        if localname(el.tag) == "mxGraphModel":
-            pw, ph = el.get("pageWidth"), el.get("pageHeight")
+class Page:
+    def __init__(self, name: str, diagram_el: ET.Element, model_el: ET.Element | None) -> None:
+        self.name = name
+        self.diagram_el = diagram_el
+        self.model_el = model_el
+        self.page_w, self.page_h = DEFAULT_PAGE
+        self.page_flag = True
+        if model_el is not None:
+            pw, ph = model_el.get("pageWidth"), model_el.get("pageHeight")
             if pw and ph:
-                page_w, page_h = float(pw), float(ph)
-            page_flag = el.get("page", "1") != "0"
-            break
+                self.page_w, self.page_h = float(pw), float(ph)
+            self.page_flag = model_el.get("page", "1") != "0"
 
-    # ---- collect cells -------------------------------------------------
+
+class PageReport:
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
+        self.n_cells = 0
+        self.n_shapes = 0
+        self.n_edges = 0
+
+    def error(self, msg: str) -> None:
+        self.errors.append(msg)
+
+    def warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+
+def first_model(el: ET.Element) -> ET.Element | None:
+    for node in el.iter():
+        if localname(node.tag) == "mxGraphModel":
+            return node
+    return None
+
+
+def collect_pages(root: ET.Element) -> list[Page]:
+    diagrams = [el for el in root if localname(el.tag) == "diagram"]
+    if not diagrams:
+        # No <diagram> wrapper: treat the whole document as one page.
+        return [Page("", root, first_model(root))]
+    return [
+        Page(diag.get("name") or diag.get("id") or "", diag, first_model(diag))
+        for diag in diagrams
+    ]
+
+
+def compressed_payload(diagram_el: ET.Element) -> bool:
+    """True if a <diagram> holds non-XML content (typically a base64 payload)."""
+    for node in diagram_el.iter():
+        if localname(node.tag) in ("mxGraphModel", "mxCell"):
+            return False
+    return bool("".join(diagram_el.itertext()).strip())
+
+
+def check_page(page: Page, args: argparse.Namespace, page_idx: int,
+               all_page_ids: list[set[str]]) -> PageReport:
+    rep = PageReport()
+
+    # ---- compressed / encoded payload ----------------------------------
+    if page.model_el is None:
+        if compressed_payload(page.diagram_el):
+            rep.error(
+                f"page {page.name or page_idx + 1!r}: detected a compressed/encoded "
+                f"diagram payload (压缩/编码图表载荷); do not hand-edit it — export "
+                f"from draw.io via 'Extras -> Uncompressed XML' before editing"
+            )
+            return rep
+        # No model and no payload: an empty/blank page. Fall through to the
+        # normal checks so an empty document still reports missing cells.
+
+    # ---- collect cells (page-scoped) -----------------------------------
     cells: dict[str, dict] = {}
-    for el in root.iter():
+    for el in page.diagram_el.iter():
         if localname(el.tag) != "mxCell":
             continue
         cid = el.get("id")
@@ -249,10 +326,19 @@ def main() -> int:
             "points": points,
         }
 
+    rep.n_cells = len(cells)
+    rep.n_shapes = sum(1 for c in cells.values() if c["vertex"])
+    rep.n_edges = sum(1 for c in cells.values() if c["edge"])
+
     if not cells:
         rep.error("no <mxCell> elements found; this is not a valid diagram")
 
-    # ---- structure checks ---------------------------------------------
+    # ---- structure checks (page-scoped, no cross-page references) ------
+    other_ids: set[str] = set()
+    for i, ids in enumerate(all_page_ids):
+        if i != page_idx:
+            other_ids |= ids
+
     if "0" not in cells:
         rep.error('missing root cell id="0"')
     if "1" not in cells:
@@ -260,12 +346,24 @@ def main() -> int:
 
     for cid, c in cells.items():
         if c["parent"] is not None and c["parent"] not in cells:
-            rep.error(f'cell {cid!r}: parent={c["parent"]!r} does not exist')
+            if c["parent"] in other_ids:
+                rep.error(
+                    f'cell {cid!r}: parent={c["parent"]!r} is on another page '
+                    f"(cross-page parent reference)"
+                )
+            else:
+                rep.error(f'cell {cid!r}: parent={c["parent"]!r} does not exist')
         if c["edge"]:
             for attr in ("source", "target"):
                 ref = c[attr]
                 if ref is not None and ref not in cells:
-                    rep.error(f'edge {cid!r}: {attr}={ref!r} does not exist')
+                    if ref in other_ids:
+                        rep.error(
+                            f'edge {cid!r}: {attr}={ref!r} is on another page '
+                            f"(cross-page reference)"
+                        )
+                    else:
+                        rep.error(f'edge {cid!r}: {attr}={ref!r} does not exist')
             if c["source"] is not None and c["source"] == c["target"]:
                 rep.warn(f'edge {cid!r}: source == target (loopback)')
 
@@ -300,12 +398,13 @@ def main() -> int:
             if r[0] < 0 or r[1] < 0:
                 rep.error(f"cell {cid!r}: negative coordinates ({r[0]:.0f},{r[1]:.0f})")
 
-    if page_flag:
+    if page.page_flag:
         for cid, (x, y, x1, y1) in abs_rect.items():
-            if x1 > page_w + 0.5 or y1 > page_h + 0.5:
+            if x1 > page.page_w + 0.5 or y1 > page.page_h + 0.5:
                 rep.error(
                     f"cell {cid!r}: extends past page bounds "
-                    f"({x1:.0f} > {page_w:.0f} or {y1:.0f} > {page_h:.0f}); the render will clip it"
+                    f"({x1:.0f} > {page.page_w:.0f} or {y1:.0f} > {page.page_h:.0f}); "
+                    f"the render will clip it"
                 )
 
     # children inside containers + below swimlane header
@@ -369,12 +468,36 @@ def main() -> int:
                     f"(< {args.min_gap:.0f})"
                 )
 
-    # ---- edge crossing check -------------------------------------------
-    def center(cid: str):
+    # ---- edge geometry --------------------------------------------------
+    def edge_anchor(cid: str, style: dict[str, str], is_source: bool):
+        """Absolute edge endpoint from explicit style anchors, else the default
+        rule shared with render_drawio.py's anchor(): the side midpoint facing
+        the other endpoint."""
         r = abs_rect.get(cid)
         if r is None:
             return None
-        return ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)
+        x, y = r[0], r[1]
+        w, h = r[2] - r[0], r[3] - r[1]
+        if is_source:
+            ax, ay = style.get("exitX"), style.get("exitY")
+        else:
+            ax, ay = style.get("entryX"), style.get("entryY")
+        if ax is not None and ay is not None:
+            try:
+                return (x + w * float(ax), y + h * float(ay))
+            except ValueError:
+                pass
+        other = cells[cid]["target"] if is_source else cells[cid]["source"]
+        og = abs_rect.get(other)
+        if og is None:
+            return (x + w / 2, y + h / 2)
+        if og[0] >= x + w:
+            return (x + w, y + h / 2)
+        if og[2] <= x:
+            return (x, y + h / 2)
+        if og[1] >= y + h:
+            return (x + w / 2, y + h)
+        return (x + w / 2, y)
 
     for cid, c in cells.items():
         if not c["edge"]:
@@ -382,40 +505,143 @@ def main() -> int:
         s, t = c["source"], c["target"]
         if s not in abs_rect or t not in abs_rect:
             continue
-        p0, p1 = center(s), center(t)
+        st = c["style"]
+        p0 = edge_anchor(s, st, True)
+        p1 = edge_anchor(t, st, False)
         if p0 is None or p1 is None:
             continue
-        poly = [p0] + c["points"] + [p1]
+        pts = [p0] + c["points"] + [p1]
+        if not c["points"] and st.get("edgeStyle") == "orthogonalEdgeStyle":
+            # single-bend L route, matching render_drawio.py
+            if abs(p1[0] - p0[0]) >= abs(p1[1] - p0[1]):
+                pts = [p0, (p1[0], p0[1]), p1]
+            else:
+                pts = [p0, (p0[0], p1[1]), p1]
+
+        # ---- waypoints / anchors on page (T5) --------------------------
+        if page.page_flag:
+            for px, py in pts:
+                if px < -0.5 or py < -0.5 or px > page.page_w + 0.5 or py > page.page_h + 0.5:
+                    rep.error(
+                        f"edge {cid!r}: point ({px:.0f},{py:.0f}) is outside page bounds "
+                        f"({page.page_w:.0f}x{page.page_h:.0f}); the render will clip it"
+                    )
+
+        # ---- crossing check (T3) ----------------------------------------
+        if st.get("curved") == "1":
+            rep.warn(
+                f"edge {cid!r} ({s!r}->{t!r}) is curved; crossing with unrelated "
+                f"shapes cannot be determined mechanically, please confirm visually"
+            )
+            continue
         blocked = set(parent_chain(s)) | set(parent_chain(t)) | {s, t}
         for other, rect in abs_rect.items():
             if not cells[other]["vertex"] or other in blocked:
                 continue
-            for k in range(len(poly) - 1):
-                if seg_rect_intersect(poly[k], poly[k + 1], rect):
+            for k in range(len(pts) - 1):
+                if seg_rect_intersect(pts[k], pts[k + 1], rect):
                     rep.error(f"edge {cid!r} ({s!r}->{t!r}) crosses unrelated shape {other!r}")
                     break
 
-    # ---- report --------------------------------------------------------
+    return rep
+
+
+def report(args: argparse.Namespace, pages: list[Page], reports: list[PageReport],
+           file_errors: list[str]) -> int:
     print(f"Checked: {args.file}")
-    n_shapes = sum(1 for c in cells.values() if c["vertex"])
-    n_edges = sum(1 for c in cells.values() if c["edge"])
-    print(f"  cells: {len(cells)}, shapes: {n_shapes}, edges: {n_edges}")
-    print(f"  page: {page_w:.0f}x{page_h:.0f} (page={page_flag})")
-    if rep.warnings:
-        print(f"WARNINGS ({len(rep.warnings)}):")
-        for w in rep.warnings:
-            print(f"  - {w}")
-    if rep.errors or (args.strict and rep.warnings):
-        print(f"ERRORS ({len(rep.errors)}):")
-        for e in rep.errors:
-            print(f"  - {e}")
-        if args.strict and rep.warnings:
-            print(f"ERRORS (warnings promoted by --strict) ({len(rep.warnings)}):")
-            for w in rep.warnings:
+    multi = len(pages) > 1
+    if multi:
+        print(f"  pages: {len(pages)}")
+
+    if not multi:
+        page, r = pages[0], reports[0]
+        print(f"  cells: {r.n_cells}, shapes: {r.n_shapes}, edges: {r.n_edges}")
+        print(f"  page: {page.page_w:.0f}x{page.page_h:.0f} (page={page.page_flag})")
+        if r.warnings:
+            print(f"WARNINGS ({len(r.warnings)}):")
+            for w in r.warnings:
                 print(f"  - {w}")
+        if r.errors or (args.strict and r.warnings):
+            print(f"ERRORS ({len(r.errors)}):")
+            for e in r.errors:
+                print(f"  - {e}")
+            if args.strict and r.warnings:
+                print(f"ERRORS (warnings promoted by --strict) ({len(r.warnings)}):")
+                for w in r.warnings:
+                    print(f"  - {w}")
+            return 1
+        print("OK: no errors.")
+        return 0
+
+    for i, (page, r) in enumerate(zip(pages, reports)):
+        name = page.name or f"page-{i + 1}"
+        print(f'Page "{name}" ({page.page_w:.0f}x{page.page_h:.0f}, page={page.page_flag}):')
+        print(f"  cells: {r.n_cells}, shapes: {r.n_shapes}, edges: {r.n_edges}")
+        if r.warnings:
+            print(f"  WARNINGS ({len(r.warnings)}):")
+            for w in r.warnings:
+                print(f"    - {w}")
+        if r.errors:
+            print(f"  ERRORS ({len(r.errors)}):")
+            for e in r.errors:
+                print(f"    - {e}")
+
+    if file_errors:
+        print(f"ERRORS (file) ({len(file_errors)}):")
+        for e in file_errors:
+            print(f"  - {e}")
+
+    any_errors = bool(file_errors or any(r.errors for r in reports))
+    promoted = bool(args.strict and any(r.warnings for r in reports))
+    if any_errors or promoted:
+        n_err = len(file_errors) + sum(len(r.errors) for r in reports)
+        msg = f"ERRORS: {n_err} error(s)"
+        if promoted:
+            n_prom = sum(len(r.warnings) for r in reports)
+            msg += f" (+ {n_prom} warning(s) promoted by --strict)"
+        print(msg)
         return 1
     print("OK: no errors.")
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        tree = ET.parse(args.file)
+    except ET.ParseError as exc:
+        print(f"ERROR: not well-formed XML: {exc}")
+        return 1
+    except OSError as exc:
+        print(f"ERROR: cannot read file: {exc}")
+        return 2
+
+    root = tree.getroot()
+    pages = collect_pages(root)
+
+    # file-level: <diagram> ids must be unique
+    file_errors: list[str] = []
+    seen_ids: dict[str, int] = {}
+    for i, p in enumerate(pages):
+        did = p.diagram_el.get("id")
+        if did is None:
+            continue
+        if did in seen_ids:
+            file_errors.append(
+                f"duplicate <diagram> id: {did!r} (page {seen_ids[did] + 1} and page {i + 1})"
+            )
+        else:
+            seen_ids[did] = i
+
+    all_page_ids: list[set[str]] = []
+    for p in pages:
+        ids = {el.get("id") for el in p.diagram_el.iter()
+               if localname(el.tag) == "mxCell" and el.get("id") is not None}
+        all_page_ids.append(ids)
+
+    reports = [check_page(p, args, i, all_page_ids) for i, p in enumerate(pages)]
+    return report(args, pages, reports, file_errors)
 
 
 if __name__ == "__main__":

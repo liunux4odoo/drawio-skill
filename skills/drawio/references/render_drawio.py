@@ -24,6 +24,7 @@ import argparse
 import html
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 
 DEFAULT_FILL = "#ffffff"
@@ -55,19 +56,56 @@ def unescape(value: str | None) -> str:
     return re.sub(r"<[^>]+>", "", html.unescape(value)).replace("&#10;", "\n")
 
 
+def char_width(ch: str) -> float:
+    """Approximate glyph width in em units.
+
+    East Asian wide/full/ambiguous characters (CJK, full-width punctuation) are
+    ~1.0em wide; everything else is estimated at 0.6em (Latin average). Shared
+    rule with verify_diagram.py — keep both in sync.
+    """
+    return 1.0 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 0.6
+
+
+def wrap_label(line: str, size: float, width: float) -> list[str]:
+    """Break `line` into display lines by word boundaries.
+
+    Words are maximal runs of non-space characters, packed greedily so each
+    line's width (per-char widths, East Asian aware) stays within `width`. A
+    single word wider than the box is kept whole so it overflows — draw.io
+    wraps at spaces and clips an over-long unbroken run. Mirrors
+    verify_diagram.py's wrap logic.
+    """
+    if line == "":
+        return [""]
+    cap_em = (width / size) if size > 0 else 0.0
+    out: list[str] = []
+    cur = ""
+    cur_em = 0.0
+    for word in line.split(" "):
+        w_em = sum(char_width(ch) for ch in word)
+        if cur and cur_em + char_width(" ") + w_em > cap_em:
+            out.append(cur)
+            cur = word
+            cur_em = w_em
+        elif cur:
+            cur = f"{cur} {word}"
+            cur_em = cur_em + char_width(" ") + w_em
+        else:
+            cur = word
+            cur_em = w_em
+    if cur:
+        out.append(cur)
+    return out
+
+
 def split_lines(text: str, style: dict, width: float) -> list[str]:
     lines = text.split("\n")
     if style.get("whiteSpace") != "wrap":
         return lines
-    # crude width fit: ~7px per char at fontSize 12
-    size = float(style.get("fontSize", "12"))
-    cap = max(int(width / (size * 0.6)), 4)
+    size = float(style.get("fontSize", "12") or "12")
     out: list[str] = []
     for ln in lines:
-        while len(ln) > cap:
-            out.append(ln[:cap])
-            ln = ln[cap:]
-        out.append(ln)
+        out.extend(wrap_label(ln, size, width))
     return out
 
 
