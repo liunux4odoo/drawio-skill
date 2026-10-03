@@ -17,6 +17,7 @@ Usage:
     python3 render_drawio.py file.drawio                # -> file.svg
     python3 render_drawio.py file.drawio -o out.svg
     python3 render_drawio.py file.drawio --png          # -> file.svg + file.png
+    python3 render_drawio.py file.drawio --page 2       # render one page (index or name)
 """
 
 from __future__ import annotations
@@ -119,54 +120,79 @@ def split_lines(text: str, style: dict, width: float) -> list[str]:
 class Renderer:
     def __init__(self) -> None:
         self.cells: dict[str, dict] = {}
+        self.pages: list[tuple[str, dict[str, dict]]] = []
         self.defs: list[str] = []
         self.body: list[str] = []
         self.marker_ids: set[str] = set()
 
     def load(self, path: str) -> None:
         tree = ET.parse(path)
-        for el in tree.getroot().iter():
-            if localname(el.tag) != "mxCell":
-                continue
-            cid = el.get("id")
-            if cid in (None, "0", "1"):
-                continue
-            geom = None
-            points: list[tuple[float, float]] = []
-            rel = False
-            for child in el:
-                if localname(child.tag) != "mxGeometry":
+        root = tree.getroot()
+        diagrams = [el for el in root if localname(el.tag) == "diagram"]
+        if not diagrams:
+            diagrams = [root]
+        self.pages = []
+        for diag in diagrams:
+            name = diag.get("name") or diag.get("id") or ""
+            cells: dict[str, dict] = {}
+            for el in diag.iter():
+                if localname(el.tag) != "mxCell":
                     continue
-                rel = child.get("relative", "0") == "1"
-                x, y, w, h = (child.get(k) for k in ("x", "y", "width", "height"))
-                try:
-                    geom = (float(x or 0), float(y or 0),
-                            float(w or 0), float(h or 0))
-                except ValueError:
-                    geom = (0.0, 0.0, 0.0, 0.0)
-                for arr in child:
-                    if localname(arr.tag) != "Array" or arr.get("as") != "points":
+                cid = el.get("id")
+                if cid in (None, "0", "1"):
+                    continue
+                geom = None
+                points: list[tuple[float, float]] = []
+                rel = False
+                for child in el:
+                    if localname(child.tag) != "mxGeometry":
                         continue
-                    for pt in arr:
-                        if localname(pt.tag) == "mxPoint":
-                            try:
-                                points.append((float(pt.get("x", 0)),
-                                               float(pt.get("y", 0))))
-                            except ValueError:
-                                pass
-            self.cells[cid] = {
-                "id": cid,
-                "parent": el.get("parent"),
-                "vertex": el.get("vertex") == "1",
-                "edge": el.get("edge") == "1",
-                "source": el.get("source"),
-                "target": el.get("target"),
-                "value": unescape(el.get("value")),
-                "style": parse_style(el.get("style", "")),
-                "geom": geom,
-                "rel": rel,
-                "points": points,
-            }
+                    rel = child.get("relative", "0") == "1"
+                    x, y, w, h = (child.get(k) for k in ("x", "y", "width", "height"))
+                    try:
+                        geom = (float(x or 0), float(y or 0),
+                                float(w or 0), float(h or 0))
+                    except ValueError:
+                        geom = (0.0, 0.0, 0.0, 0.0)
+                    for arr in child:
+                        if localname(arr.tag) != "Array" or arr.get("as") != "points":
+                            continue
+                        for pt in arr:
+                            if localname(pt.tag) == "mxPoint":
+                                try:
+                                    points.append((float(pt.get("x", 0)),
+                                                   float(pt.get("y", 0))))
+                                except ValueError:
+                                    pass
+                cells[cid] = {
+                    "id": cid,
+                    "parent": el.get("parent"),
+                    "vertex": el.get("vertex") == "1",
+                    "edge": el.get("edge") == "1",
+                    "source": el.get("source"),
+                    "target": el.get("target"),
+                    "value": unescape(el.get("value")),
+                    "style": parse_style(el.get("style", "")),
+                    "geom": geom,
+                    "rel": rel,
+                    "points": points,
+                }
+            self.pages.append((name, cells))
+        # merged view for default rendering (keeps multi-page files working)
+        self.cells = {}
+        for _, cells in self.pages:
+            self.cells.update(cells)
+
+    def page_index(self, sel: str) -> int | None:
+        """Resolve --page: 1-based index or page name, else None."""
+        if sel.isdigit():
+            i = int(sel) - 1
+            if 0 <= i < len(self.pages):
+                return i
+        for i, (name, _) in enumerate(self.pages):
+            if name == sel:
+                return i
+        return None
 
     # ---- geometry -----------------------------------------------------
     def parent_chain(self, cid: str) -> list[str]:
@@ -427,16 +453,34 @@ def main() -> int:
     ap.add_argument("file", help="path to the .drawio file")
     ap.add_argument("-o", "--output", help="output .svg path (default: input name)")
     ap.add_argument("--png", action="store_true", help="also write .png (needs cairosvg)")
+    ap.add_argument("--page", help="render only page N (1-based index) or page name")
     args = ap.parse_args()
 
     out_svg = args.output or (args.file.rsplit(".", 1)[0] + ".svg")
     try:
         r = Renderer()
         r.load(args.file)
+        if args.page is not None:
+            idx = r.page_index(args.page)
+            if idx is None:
+                names = ", ".join(name or str(i + 1)
+                                  for i, (name, _) in enumerate(r.pages))
+                print(f"ERROR: no such page: {args.page!r} (pages: {names})")
+                return 1
+            r.cells = r.pages[idx][1]
+            page_label = r.pages[idx][0] or str(idx + 1)
+        else:
+            page_label = None
         svg = r.render()
         with open(out_svg, "w", encoding="utf-8") as f:
             f.write(svg)
-        print(f"Wrote {out_svg} ({len(r.cells)} cells)")
+        if page_label is not None:
+            print(f"Wrote {out_svg} (page {page_label!r}, {len(r.cells)} cells)")
+        else:
+            print(f"Wrote {out_svg} ({len(r.cells)} cells)")
+        if page_label is None and len(r.pages) > 1:
+            print(f"NOTE: file has {len(r.pages)} pages; merged them into one SVG. "
+                  f"Use --page to render a single page.")
     except ET.ParseError as exc:
         print(f"ERROR: not well-formed XML: {exc}")
         return 1

@@ -219,7 +219,11 @@ The §8.1 checklist always runs. If your model can see images, **add** a rendere
      ```bash
      python3 references/render_drawio.py file.drawio -o out.svg
      python3 references/render_drawio.py file.drawio --png   # needs pip install cairosvg
+     python3 references/render_drawio.py file.drawio --page 2   # multi-page: pick a page
      ```
+   - Multi-page files are merged into one SVG by default; the exporter prints a
+     NOTE when that happens. Use `--page` (1-based index or page name) to render
+     a single page.
    - Or export via the draw.io client's PNG/SVG export if available.
    - If no renderer exists at all, skip this step and say so — §8.1 still applies.
    - Caveat: the Python exporter approximates draw.io (no HTML labels / icon shapes); exact-render mismatches are acceptable here — you are checking layout defects, not pixel fidelity.
@@ -265,7 +269,7 @@ Transient generator workflow:
 
 | File | Purpose |
 |---|---|
-| `references/verify_diagram.py` | Mechanical verifier: parse + structure + geometry checks + label-overflow heuristic. Run after every create/edit (§8.1). |
+| `references/verify_diagram.py` | Mechanical verifier: parse + structure + geometry checks + label-overflow heuristic + edge anchor rules (§6 rules 2–3). Run after every create/edit (§8.1). |
 | `references/render_drawio.py` | Stdlib-only SVG exporter (optional PNG via cairosvg) for the §8.2 visual check when no draw.io CLI is installed. |
 | `references/generate_diagram.py` | Transient generator template with `box()`/`container()`/`child()`/`edge()` helpers and a data-driven layout loop (§9). |
 | `references/patterns.md` | Copy-paste patterns (flowchart, org chart, swimlane, ER) and the full shape/edge/text style catalog (§4.4). |
