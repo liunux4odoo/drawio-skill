@@ -82,7 +82,7 @@ def edge(cid, source, target, label="", anchor=0.5, start_anchor=1.0):
 def emit(cells: list[str], page_w: int = PAGE_W, page_h: int = PAGE_H) -> str:
     body = "\n".join(cells)
     return (
-        '<mxfile host="app.diagrams.net" version="24.0.0" agent="kilo">\n'
+        '<mxfile host="app.diagrams.net" version="24.0.0">\n'
         '  <diagram id="page-1" name="Page-1">\n'
         '    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" '
         f'tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" '

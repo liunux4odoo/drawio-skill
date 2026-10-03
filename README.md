@@ -25,8 +25,8 @@ skills/
 The skill lives at `skills/drawio/` following the Agent Skills layout
 (`<skill-name>/SKILL.md`), so any skill-capable agent can load it:
 
-- **Claude Code / Claude**: register this repository as a plugin marketplace, or
-  install the `drawio` skill folder into your agent's skills directory.
+- **Claude Code / Claude**: install the `drawio` skill folder into your agent's
+  skills directory.
 - **Kilo**: add `skills/drawio` to the `skills.paths` list in `kilo.json`, or
   copy `skills/drawio/` into `.kilo/skills/` of any project.
 - **Manual**: copy the whole `skills/drawio/` folder wherever your agent expects
