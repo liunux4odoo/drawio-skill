@@ -356,7 +356,9 @@ def check_page(page: Page, args: argparse.Namespace, page_idx: int,
         if c["edge"]:
             for attr in ("source", "target"):
                 ref = c[attr]
-                if ref is not None and ref not in cells:
+                if ref is None:
+                    rep.error(f'edge {cid!r}: missing required {attr} attribute')
+                elif ref not in cells:
                     if ref in other_ids:
                         rep.error(
                             f'edge {cid!r}: {attr}={ref!r} is on another page '
@@ -366,6 +368,46 @@ def check_page(page: Page, args: argparse.Namespace, page_idx: int,
                         rep.error(f'edge {cid!r}: {attr}={ref!r} does not exist')
             if c["source"] is not None and c["source"] == c["target"]:
                 rep.warn(f'edge {cid!r}: source == target (loopback)')
+
+    # ---- edge style checks (§6 rules 2 & 3) -----------------------------
+    # rule 3: never attach at corners (exitX/exitY or entryX/entryY both 0/1)
+    for cid, c in cells.items():
+        if not c["edge"]:
+            continue
+        st = c["style"]
+        for side, (xk, yk) in (("exit", ("exitX", "exitY")),
+                               ("entry", ("entryX", "entryY"))):
+            xv, yv = st.get(xk), st.get(yk)
+            if xv in ("0", "1") and yv in ("0", "1"):
+                rep.warn(
+                    f'edge {cid!r}: {side} anchor sits on a corner '
+                    f"({xk}={xv}, {yk}={yv}); attach on a side, not a corner "
+                    f"(§6 rule 3)"
+                )
+                break
+    # rule 2: two edges between the same pair must differ in exit/entry anchors
+    same_pair: dict[tuple[str | None, str | None],
+                    list[tuple[str, tuple[str | None, ...]]]] = {}
+    for cid, c in cells.items():
+        if not c["edge"]:
+            continue
+        st = c["style"]
+        key = (st.get("exitX"), st.get("exitY"),
+               st.get("entryX"), st.get("entryY"))
+        same_pair.setdefault((c["source"], c["target"]), []).append((cid, key))
+    for (s, t), edges in same_pair.items():
+        if s is None or t is None:
+            continue
+        seen: dict[tuple[str | None, ...], str] = {}
+        for cid, key in edges:
+            if key in seen:
+                rep.warn(
+                    f'edges {seen[key]!r} and {cid!r} share source/target '
+                    f"({s!r}->{t!r}) with identical anchors {key}; use "
+                    f"different exit/entry anchors (§6 rule 2)"
+                )
+            else:
+                seen[key] = cid
 
     # ---- absolute geometry ---------------------------------------------
     def parent_chain(cid: str) -> list[str]:
