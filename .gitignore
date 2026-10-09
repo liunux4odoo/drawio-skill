@@ -15,3 +15,6 @@ venv/
 # Generated
 *.drawio.svg
 *.drawio.png
+
+# QwenPaw skill runtime logs (defensive; scripts disable file logging anyway)
+skills/qwenpaw/logs/
