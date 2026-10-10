@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "skills" / "quarkdown" / "references" / "extract_docx_style.py"
+SCRIPT = ROOT / "skills" / "quarkdown" / "scripts" / "extract_docx_style.py"
 FIXTURES = ROOT / "tests" / "fixtures"
 MIXED = FIXTURES / "mixed_numbering.docx"
 DEC = FIXTURES / "dec_numbering.docx"

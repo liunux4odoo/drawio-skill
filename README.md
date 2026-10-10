@@ -18,10 +18,10 @@ skills/
 ├── quarkdown/
 │   ├── SKILL.md              # author .qd documents (typeset HTML/PDF/slides/wikis)
 │   ├── references/
-│   │   ├── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
-│   │   └── extract_docx_style.py # docx / docx-generator → reusable .qd template
+│   │   └── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
 │   └── scripts/
-│       └── md2pdf.py             # plain Markdown → PDF via a generated .qd template
+│       ├── md2pdf.py             # plain Markdown → PDF via a generated .qd template
+│       └── extract_docx_style.py # docx / docx-generator → reusable .qd template
 └── qwenpaw/
     ├── SKILL.md              # query QwenPaw agents' accumulated memory
     └── scripts/
@@ -104,7 +104,7 @@ template — fonts, sizes, colors, paragraph spacing, alignment, and heading
 numbering — use the style extractor:
 
 ```bash
-python3 references/extract_docx_style.py input.docx [-o template.qd] [--dry-run]
+python3 scripts/extract_docx_style.py input.docx [-o template.qd] [--dry-run]
 ```
 
 ### QwenPaw (`skills/qwenpaw/`)

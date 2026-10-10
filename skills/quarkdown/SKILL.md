@@ -224,7 +224,7 @@ If the user wants to start a new Quarkdown project, tell them to run `quarkdown 
 |---|---|
 | `references/quick-reference.md` | Copy-paste syntax for the most common Quarkdown tasks, each with a link to the full wiki page for details. |
 | `scripts/md2pdf.py` | Convert a plain Markdown file to PDF via a generated Quarkdown template (see "Converting Markdown to PDF" below). |
-| `references/extract_docx_style.py` | Extract styles from a `.docx` (or a `.py` that generates one) into a reusable `.qd` template (see "Converting docx styles to a qd template" below). |
+| `scripts/extract_docx_style.py` | Extract styles from a `.docx` (or a `.py` that generates one) into a reusable `.qd` template (see "Converting docx styles to a qd template" below). |
 
 ## Converting Markdown to PDF
 
@@ -246,10 +246,10 @@ Exit codes: `0` success, `1` input/argument error, `2` compilation failure, `3` 
 
 ## Converting docx styles to a qd template
 
-Use `references/extract_docx_style.py` when the user hands you a **`.docx` file** (or a `.py` script that generates one) and wants a reusable Quarkdown template that reproduces its styling — fonts, sizes, colors, spacing, line height, indent, alignment, and heading numbering. The script extracts the effective formatting from the actual document elements (paragraphs/runs, including the CJK font from `w:rFonts w:eastAsia`) and writes a `.qd` template meant to be `.include`d by business documents.
+Use `scripts/extract_docx_style.py` when the user hands you a **`.docx` file** (or a `.py` script that generates one) and wants a reusable Quarkdown template that reproduces its styling — fonts, sizes, colors, spacing, line height, indent, alignment, and heading numbering. The script extracts the effective formatting from the actual document elements (paragraphs/runs, including the CJK font from `w:rFonts w:eastAsia`) and writes a `.qd` template meant to be `.include`d by business documents.
 
 ```bash
-python3 references/extract_docx_style.py <input.docx|input.py> [-o template.qd]
+python3 scripts/extract_docx_style.py <input.docx|input.py> [-o template.qd]
     [--heading-levels 1-3] [--dry-run] [--no-verify]
 ```
 

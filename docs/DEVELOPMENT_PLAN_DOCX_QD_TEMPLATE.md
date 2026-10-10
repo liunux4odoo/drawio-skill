@@ -35,7 +35,7 @@
 
 ## 1. 功能目标（WHAT）
 
-新增脚本 `skills/quarkdown/references/extract_docx_style.py`，实现：
+新增脚本 `skills/quarkdown/scripts/extract_docx_style.py`，实现：
 
 **输入**（二选一，入口统一为 docx）：
 - 指定 `.docx` 文件 → 直接解析
@@ -235,7 +235,7 @@ docx 提取的 pt 字号 → qd 映射规则（二选一，默认策略 1）：
 ## 5. 脚本接口（WHAT）
 
 ```
-python3 skills/quarkdown/references/extract_docx_style.py \
+python3 skills/quarkdown/scripts/extract_docx_style.py \
     <input.docx | input.py> \
     [-o output.qd] \
     [--heading-levels 1-3] \
@@ -256,7 +256,7 @@ python3 skills/quarkdown/references/extract_docx_style.py \
 
 - `## Converting docx styles to a qd template`：
   - 何时用：用户给 docx / docx 生成脚本，要 qd 模板
-  - 用法：`python3 references/extract_docx_style.py <input> -o template.qd`
+  - 用法：`python3 scripts/extract_docx_style.py <input> -o template.qd`
   - 编号处理约定（§2 总原则，一句话）：qd 不支持的编号写死进标题文本
   - 覆盖范围边界（§3.5）：表格/页眉页脚等不覆盖
   - 校验：`quarkdown c template.qd --strict`（引现有 Workflow 节的编译命令）
@@ -292,21 +292,21 @@ python3 skills/quarkdown/references/extract_docx_style.py \
 
 ```bash
 # 1. 脚本语法
-python3 -m py_compile skills/quarkdown/references/extract_docx_style.py
+python3 -m py_compile skills/quarkdown/scripts/extract_docx_style.py
 
 # 2. docx 输入 → 生成模板（fixture：含 1. / （一）/ 1.1 混合编号的样例 docx）
-python3 skills/quarkdown/references/extract_docx_style.py tests/fixtures/mixed_numbering.docx -o /tmp/_tpl.qd --dry-run
+python3 skills/quarkdown/scripts/extract_docx_style.py tests/fixtures/mixed_numbering.docx -o /tmp/_tpl.qd --dry-run
 # 期望：编号检测报告中文数字（（一））→ 方案 B
 
-python3 skills/quarkdown/references/extract_docx_style.py tests/fixtures/mixed_numbering.docx -o /tmp/_tpl.qd
+python3 skills/quarkdown/scripts/extract_docx_style.py tests/fixtures/mixed_numbering.docx -o /tmp/_tpl.qd
 # 期望：生成的模板中 .extend 块含 numbered:{no}，.numbering 不出现 headings 或为 none
 
 # 3. 纯 qd 支持编号（fixture：1.1.1 十进制）
-python3 skills/quarkdown/references/extract_docx_style.py tests/fixtures/dec_numbering.docx -o /tmp/_tpl2.qd
+python3 skills/quarkdown/scripts/extract_docx_style.py tests/fixtures/dec_numbering.docx -o /tmp/_tpl2.qd
 # 期望：.numbering - headings: 1.1.1（或按实际层级）
 
 # 4. py 脚本输入（fixture：无副作用的 python-docx 生成脚本）
-python3 skills/quarkdown/references/extract_docx_style.py tests/fixtures/gen_docx.py -o /tmp/_tpl3.qd
+python3 skills/quarkdown/scripts/extract_docx_style.py tests/fixtures/gen_docx.py -o /tmp/_tpl3.qd
 
 # 5. 模板编译校验
 quarkdown c /tmp/_tpl.qd --strict --out /tmp/quarkdown-verify
