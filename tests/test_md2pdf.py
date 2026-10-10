@@ -15,6 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "skills" / "quarkdown" / "scripts" / "md2pdf.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "sample.md"
+TEMPLATE_FIXTURE = ROOT / "tests" / "fixtures" / "tpl-dec.qd"
 
 
 def run_md2pdf(*args):
@@ -122,3 +123,94 @@ def test_integration_custom_params_generates_pdf(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert out.exists() and out.stat().st_size > 0
+
+
+@pytest.mark.integration
+def test_integration_template_mode_generates_pdf(tmp_path):
+    """--template 模式：用外部 .qd 模板编译 PDF（模拟用户把模板放在项目目录）。"""
+    # 把模板拷到临时目录（quarkdown 只允许包含工作区内的文件）
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    out = tmp_path / "template.pdf"
+    r = run_md2pdf(FIXTURE, "--template", template_in_project, "-o", out)
+    assert r.returncode == 0, r.stderr
+    assert out.exists() and out.stat().st_size > 0
+    assert "md2pdf: 成功" in r.stdout
+    assert "--template" in r.stdout
+
+
+@pytest.mark.integration
+def test_integration_template_dry_run_shows_include(tmp_path):
+    """--template + --dry-run 只显示 .include 行。"""
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    r = run_md2pdf(FIXTURE, "--template", template_in_project, "--dry-run")
+    assert r.returncode == 0
+    assert ".include {" in r.stdout
+    assert str(template_in_project.absolute()) in r.stdout
+    assert ".docname" not in r.stdout  # 不应有内联模板内容
+    assert ".theme" not in r.stdout
+    assert ".font" not in r.stdout
+
+
+@pytest.mark.integration
+def test_integration_template_override_theme_font(tmp_path):
+    """--template + --override theme,font 覆盖模板的主题和字体。"""
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    out = tmp_path / "override.pdf"
+    r = run_md2pdf(
+        FIXTURE, "--template", template_in_project,
+        "--override", "theme,font,size",
+        "--theme", "darko", "--font", "Noto Sans CJK SC", "--size", "10",
+        "-o", out,
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.exists() and out.stat().st_size > 0
+    assert "--override theme,font,size" in r.stdout
+
+
+@pytest.mark.integration
+def test_integration_template_override_numbered_heading(tmp_path):
+    """--template + --override numbered,heading-style,heading-color 覆盖编号和标题样式。"""
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    out = tmp_path / "override2.pdf"
+    r = run_md2pdf(
+        FIXTURE, "--template", template_in_project,
+        "--override", "numbered,heading-style,heading-color,page",
+        "--numbered", "on", "--heading-style", "1:large,2:medium",
+        "--heading-color", "navy", "--page", "A5",
+        "-o", out,
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.exists() and out.stat().st_size > 0
+
+
+@pytest.mark.integration
+def test_integration_template_override_disable_numbering(tmp_path):
+    """--template + --override numbered --numbered off 显式禁用模板的自动编号。"""
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    r = run_md2pdf(FIXTURE, "--template", template_in_project,
+                   "--override", "numbered", "--numbered", "off", "--dry-run")
+    assert r.returncode == 0
+    assert "numbered:{no}" in r.stdout
+    assert ".numbering" not in r.stdout
+
+
+@pytest.mark.integration
+def test_integration_template_override_invalid_item_exit_1(tmp_path):
+    """--override 包含非法项应报错退出码 1。"""
+    template_in_project = tmp_path / "template.qd"
+    import shutil
+    shutil.copy2(TEMPLATE_FIXTURE, template_in_project)
+    r = run_md2pdf(FIXTURE, "--template", template_in_project,
+                   "--override", "invalid-item")
+    assert r.returncode == 1
+    assert "非法" in r.stderr

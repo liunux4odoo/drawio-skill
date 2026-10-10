@@ -1,0 +1,37 @@
+<!--
+  来源: tests/fixtures/dec_numbering.docx
+  提取格式摘要:
+    正文: 12pt / Times New Roman + 华文宋体 / 行距 1.5 / 段距 1 / 缩进 2 / 对齐 justify
+    H1: 22.0pt / Times New Roman / 加粗 / #1f4e79
+    H2: 16.0pt / Times New Roman / 加粗 / -
+    H3: 14.0pt / Times New Roman / 加粗 / -
+  编号检测:
+    H1: qd 支持
+    H2: qd 支持
+    H3: qd 支持
+  编号处理: 方案 A —— qd 自动编号 headings: 1.1.1
+-->
+
+.docname {十进制编号样例文档}
+.doctype {paged}
+.doclang {zh-CN}
+
+.font {Times New Roman} size:{12}pt
+.font {华文宋体}
+
+.paragraphstyle lineheight:{1.5} spacing:{1} indent:{2}
+
+.numbering
+    - headings: 1.1.1
+
+.extend {heading} where:{depth: .depth::equals {1}}
+    .super fontsize:{larger} fontweight:{bold} foreground:{#1f4e79}
+
+.extend {heading} where:{depth: .depth::equals {2}}
+    .super fontsize:{medium} fontweight:{bold}
+
+.extend {heading} where:{depth: .depth::equals {3}}
+    .super fontsize:{medium} fontweight:{bold}
+
+.extend {paragraph}
+    .super textalignment:{justify}

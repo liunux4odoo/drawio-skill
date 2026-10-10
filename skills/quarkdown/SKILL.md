@@ -259,3 +259,94 @@ python3 scripts/extract_docx_style.py <input.docx|input.py> [-o template.qd]
 - **Font size mapping**: qd's `fontsize` takes only relative enums (`tiny`–`huge`), so absolute sizes are set on the global `.font size:{N}pt` (body base) and heading sizes become the nearest enum (e.g. H1 22pt on a 12pt base → `larger`).
 - **Verify**: by default the script runs `quarkdown c template.qd --strict --out /tmp/quarkdown-verify` after generation (compile the same way as in the Workflow section). Use `--no-verify` to skip, and `--dry-run` to print only the extraction summary and plan A/B decision. A failed verification usually means a font referenced by the docx is not installed locally; install the font or pass `--no-verify`.
 - Exit codes: `0` success, `1` input/argument error (missing file, parse failure, risky `.py`), `2` output/verification error.
+
+## Complete workflow: docx style → Markdown → PDF
+
+The two helpers compose to let you **apply a docx file's styling to a Markdown file and export PDF**:
+
+```bash
+# Step 1: extract style from docx → reusable qd template
+python3 scripts/extract_docx_style.py sample.docx -o template.qd
+
+# Step 2: apply that template to a Markdown file → PDF
+python3 scripts/md2pdf.py input.md --template template.qd -o out.pdf
+```
+
+Or in one line:
+
+```bash
+python3 scripts/extract_docx_style.py sample.docx -o template.qd \
+    && python3 scripts/md2pdf.py input.md --template template.qd -o out.pdf
+```
+
+### How it works
+
+1. **`extract_docx_style.py`** reads the docx, infers heading/paragraph/run styles (fonts, sizes, colors, spacing, alignment, CJK fallback, numbering), and writes a **complete Quarkdown template** (`.docname/.doctype/.doclang/.font/.paragraphstyle/.extend/.numbering`).
+2. **`md2pdf.py --template template.qd`** wraps your Markdown with a single `.include {/abs/path/template.qd}` directive, compiles via `quarkdown c --pdf --strict`, and cleans up. The source `.md` is never modified.
+3. The template lives in your project (or any readable path). Quarkdown's permission model requires the included file to be within the project or granted `--allow global-read` — **put `template.qd` alongside your Markdown or in a subfolder**.
+
+### When to use each mode
+
+| Scenario | Command |
+|---|---|
+| Quick PDF from plain Markdown (no docx style reference) | `md2pdf.py input.md -o out.pdf` |
+| Reproduce a docx's visual style on Markdown content | `extract_docx_style.py sample.docx -o template.qd && md2pdf.py input.md --template template.qd -o out.pdf` |
+| Fine-tune the extracted template before applying | Edit `template.qd` manually, then `md2pdf.py input.md --template template.qd` |
+
+### Coverage boundary (same as extract step)
+
+Only the "style spec family" is transferred: fonts, sizes, colors, spacing, line height, indent, alignment, heading numbering. Tables, headers/footers, page-break control, fields, SmartArt, and text-box coordinates have no 1:1 mapping in Quarkdown and are not reproduced.
+
+### Verify
+
+After generation, spot-check the PDF: page count, heading hierarchy, font rendering, numbering style. If fonts look wrong, the docx likely referenced a font not installed locally — install it or adjust `template.qd`.
+
+## Overriding template settings in md2pdf
+
+When using `--template template.qd`, you can override specific settings from the template via `--override` (comma-separated list). This emits override directives **after** the `.include`, letting Quarkdown apply them on top of the template.
+
+```bash
+# Override theme and font only; keep template's page size, spacing, numbering, etc.
+python3 scripts/md2pdf.py input.md --template template.qd \
+    --override theme,font,size --theme darko --font "Noto Sans" --size 10 -o out.pdf
+
+# Override page size, numbering, and heading style
+python3 scripts/md2pdf.py input.md --template template.qd \
+    --override page,numbered,heading-style,heading-color \
+    --page A5 --numbered on --heading-style "1:large,2:medium" --heading-color navy -o out.pdf
+
+# Explicitly disable numbering from a template that has .numbering
+python3 scripts/md2pdf.py input.md --template template.qd \
+    --override numbered --numbered off -o out.pdf
+```
+
+### Overrideable settings
+
+| Item | Corresponding CLI flag(s) | Effect |
+|---|---|---|
+| `title` | `--title` | Override `.docname` |
+| `lang` | `--lang` | Override `.doclang` |
+| `theme` | `--theme` | Override `.theme` |
+| `page` | `--page` | Override `.pageformat size` |
+| `font` | `--font` | Override `.font` family (paired with `size`) |
+| `size` | `--size` | Override `.font` size in pt (paired with `font`) |
+| `lineheight` | `--lineheight` | Override `.paragraphstyle lineheight` |
+| `spacing` | `--spacing` | Override `.paragraphstyle spacing` |
+| `indent` | `--indent` | Override `.paragraphstyle indent` |
+| `numbered` | `--numbered on\|off` | Enable/disable `.numbering`; `off` emits `numbered:{no}` |
+| `heading-style` | `--heading-style` | Override per-level heading `fontsize` via `.extend where:{depth}` |
+| `heading-color` | `--heading-color` | Override heading `foreground` color |
+
+### How it works
+
+1. `--template` emits `.include {/abs/path/template.qd}` first.
+2. **Override items** come from:
+   - **Explicit `--override`**: comma-separated list, only those items are overridden.
+   - **Auto-inferred** (when `--override` omitted): any parameter you explicitly pass that differs from its default is treated as an override. For example, `--theme darko --font "Noto Sans"` automatically overrides theme and font; `--page A5 --numbered on` overrides page and numbering.
+3. For each override item, the corresponding directive is emitted **after** the include.
+4. Quarkdown processes directives sequentially; later directives override earlier ones from the included template.
+5. Settings **not** overridden are taken entirely from the template (no override emitted).
+
+### Design note
+
+This follows Quarkdown's natural override semantics (last write wins). The alternative — editing `template.qd` manually — is still valid for complex changes. `--override` is for quick, one-off tweaks without modifying the template file. Auto-inference lets you skip `--override` entirely for simple cases: just pass the parameters you want to change.

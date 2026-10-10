@@ -179,7 +179,33 @@ def build_extend_blocks(args: argparse.Namespace) -> list[str]:
 def build_template_lines(
     args: argparse.Namespace, md_text: str, source_path: str
 ) -> list[str]:
-    """Build the template header lines in the fixed §3.1 order."""
+    """Build the template header lines in the fixed §3.1 order.
+
+    If --template is provided, emit `.include {path}` followed by override
+    directives. Override items come from --override if given, otherwise
+    auto-inferred from explicitly passed non-default parameters.
+    Otherwise emit the full inline template per §3.1 of the development plan.
+    """
+    # Template mode: include external template + optional overrides
+    if args.template:
+        template_path = os.path.abspath(args.template)
+        if not os.path.isfile(template_path):
+            raise Md2PdfError(
+                f"--template 文件不存在：{template_path}", EXIT_INPUT_ERROR
+            )
+        lines = [f".include {{{template_path}}}"]
+
+        # Determine override items: explicit --override or auto-inferred
+        if args.override:
+            override_items = {item.strip() for item in args.override.split(",") if item.strip()}
+        else:
+            override_items = _infer_override_items(args)
+
+        if override_items:
+            lines.extend(build_override_lines(args, md_text, source_path, override_items))
+        return lines
+
+    # Inline mode (original behavior)
     title = sanitize_title(args.title or default_title(md_text, source_path))
     lines = [
         f".docname {{{title}}}",
@@ -200,23 +226,116 @@ def build_template_lines(
     return lines
 
 
+def _infer_override_items(args: argparse.Namespace) -> set[str]:
+    """Infer override items from args that differ from defaults.
+
+    Only called when --template is given but --override is NOT given.
+    User explicitly passing a non-default value signals intent to override.
+    """
+    inferred: set[str] = set()
+    for key, default in OVERRIDE_DEFAULTS.items():
+        arg_key = key.replace("_", "-")
+        # Map back to argparse attribute name
+        attr = key
+        value = getattr(args, attr, None)
+        if value != default:
+            inferred.add(arg_key)
+    return inferred
+
+
+def build_override_lines(
+    args: argparse.Namespace,
+    md_text: str,
+    source_path: str,
+    override_items: set[str],
+) -> list[str]:
+    """Generate override directives for template mode.
+
+    Quarkdown applies directives in order; directives after .include override
+    those from the included template. Only emit overrides for items explicitly
+    listed in --override (or auto-inferred when --override omitted).
+    """
+    lines: list[str] = []
+    title = sanitize_title(args.title or default_title(md_text, source_path))
+
+    if "title" in override_items:
+        lines.append(f".docname {{{title}}}")
+    if "lang" in override_items:
+        lines.append(f".doclang {{{args.lang}}}")
+    if "theme" in override_items:
+        lines.append(f".theme {{{args.theme}}} layout:{{latex}}")
+    if "page" in override_items:
+        lines.append(f".pageformat size:{{{args.page}}} margin:{{2cm}}")
+    if "font" in override_items or "size" in override_items:
+        # font and size go together in .font directive
+        lines.append(f".font {{{args.font}}} size:{{{args.size}}}pt")
+    if any(k in override_items for k in ("lineheight", "spacing", "indent")):
+        lh = args.lineheight if "lineheight" in override_items else "1.6"
+        sp = args.spacing if "spacing" in override_items else "0.5"
+        ind = args.indent if "indent" in override_items else "0"
+        lines.append(
+            f".paragraphstyle lineheight:{{{lh}}} spacing:{{{sp}}} indent:{{{ind}}}"
+        )
+    if "numbered" in override_items:
+        if args.numbered == "on":
+            lines.append(".numbering")
+            lines.append("    - headings: 1.1.1")
+        else:
+            # Explicitly disable numbering from template
+            lines.append(".extend {heading}")
+            lines.append("    .super numbered:{no}")
+    if any(k in override_items for k in ("heading-style", "heading-color")):
+        # Rebuild heading extend blocks with override values
+        styles = parse_heading_style(args.heading_style) if "heading-style" in override_items else {}
+        color = args.heading_color if "heading-color" in override_items else ""
+        numbered_off = args.numbered == "off" if "numbered" in override_items else False
+
+        if styles:
+            if numbered_off:
+                params = ["numbered:{no}"]
+                if color:
+                    params.append(f"foreground:{{{color}}}")
+                lines.append(f".extend {{heading}}\n    .super {' '.join(params)}")
+            for depth in sorted(styles):
+                params = []
+                if color:
+                    params.append(f"foreground:{{{color}}}")
+                params.append(f"fontsize:{{{styles[depth]}}}")
+                lines.append(
+                    f".extend {{heading}} where:{{depth: .depth::equals {{{depth}}}}}\n"
+                    f"    .super {' '.join(params)}"
+                )
+        elif numbered_off or color:
+            params = ["numbered:{no}"] if numbered_off else []
+            if color:
+                params.append(f"foreground:{{{color}}}")
+            lines.append(f".extend {{heading}}\n    .super {' '.join(params)}")
+    return lines
+
+
 def params_summary(args: argparse.Namespace) -> str:
-    parts = [
-        f"--theme {args.theme}",
-        f"--page {args.page}",
-        f"--font {args.font}",
-        f"size {args.size}pt",
-        f"--lineheight {args.lineheight}",
-        f"--spacing {args.spacing}",
-        f"--indent {args.indent}",
-        f"--numbered {args.numbered}",
-    ]
-    if args.heading_color:
-        parts.append(f"--heading-color {args.heading_color}")
-    if args.heading_style:
-        parts.append(f"--heading-style {args.heading_style}")
-    if args.title:
-        parts.append(f"--title {args.title}")
+    parts = []
+    if args.template:
+        parts.append(f"--template {os.path.basename(args.template)}")
+        if args.override:
+            parts.append(f"--override {args.override}")
+    else:
+        parts.extend([
+            f"--theme {args.theme}",
+            f"--page {args.page}",
+            f"--font {args.font}",
+            f"size {args.size}pt",
+            f"--lineheight {args.lineheight}",
+            f"--spacing {args.spacing}",
+            f"--indent {args.indent}",
+            f"--numbered {args.numbered}",
+        ])
+        if args.heading_color:
+            parts.append(f"--heading-color {args.heading_color}")
+        if args.heading_style:
+            parts.append(f"--heading-style {args.heading_style}")
+        if args.title:
+            parts.append(f"--title {args.title}")
     return " ".join(parts)
 
 
@@ -237,6 +356,8 @@ def temp_paths(source_path: str, args: argparse.Namespace) -> tuple[str, str]:
             str(args.heading_color or ""),
             str(args.numbered),
             str(args.heading_style or ""),
+            str(args.template or ""),
+            str(args.override or ""),
         ]
     )
     h = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:8]
@@ -359,7 +480,37 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="按级别设置标题字号枚举，如 1:large,2:medium")
     parser.add_argument("--dry-run", action="store_true",
                         help="只打印生成的模板头与拼接预览，不编译")
+    parser.add_argument("--template", metavar="template.qd",
+                        help="使用外部 Quarkdown 模板（.include 该文件），忽略内置模板参数")
+    parser.add_argument("--override", metavar="ITEMS",
+                        help="template 模式下覆盖的设置项，逗号分隔；可选：title,lang,theme,page,font,size,lineheight,spacing,indent,numbered,heading-style,heading-color")
     return parser.parse_args(argv)
+
+
+OVERRIDE_CHOICES = {
+    "title", "lang", "theme", "page", "font", "size",
+    "lineheight", "spacing", "indent", "numbered",
+    "heading-style", "heading-color",
+}
+
+# Default values for each overridable parameter (must match parse_args defaults)
+OVERRIDE_DEFAULTS = {
+    "title": None,              # auto-detected from markdown
+    "lang": "zh-CN",
+    "theme": "paperwhite",
+    "page": "A4",
+    "font": "Noto Serif CJK SC",
+    "size": "12",
+    "lineheight": "1.6",
+    "spacing": "0.5",
+    "indent": "0",
+    "heading_color": "",
+    "numbered": "off",
+    "heading_style": "",
+}
+
+# Meta args that should never be auto-inferred as overrides
+META_ARGS = {"dry_run", "output", "template", "override", "input"}
 
 
 def validate(args: argparse.Namespace) -> None:
@@ -391,6 +542,18 @@ def validate(args: argparse.Namespace) -> None:
         raise Md2PdfError(
             f"输出路径与源文件相同：{out}（源文件不可被覆盖）", EXIT_INPUT_ERROR
         )
+
+    # Validate --override items
+    if args.override:
+        for item in args.override.split(","):
+            item = item.strip()
+            if item and item not in OVERRIDE_CHOICES:
+                raise Md2PdfError(
+                    f"--override 项 '{item}' 非法（可选：{', '.join(sorted(OVERRIDE_CHOICES))}）",
+                    EXIT_INPUT_ERROR,
+                )
+
+    # Template file existence is checked in build_template_lines
 
 
 def read_md(path: str) -> str:
