@@ -64,3 +64,65 @@
 编译失败（退出码 2），并在错误信息中说明原因，避免引入新退出码。
 
 **复现**：`PATH` 中移除 quarkdown 后运行脚本，输出"未找到 quarkdown 命令"，退出码 2。
+
+## F7. docx 引用未安装字体时 `quarkdown c --strict` 校验失败
+
+`extract_docx_style.py`（docx → qd 模板）计划 §1 要求生成后校验必须通过。实测
+Quarkdown 的 `.font {字体名}` 通过 AWT `GraphicsEnvironment` 按**精确字体族名**解析
+系统字体：本机安装了 Times New Roman / Noto Serif CJK SC / 华文宋体 / 国标宋体 等，
+但常见的 docx 字体名（宋体 / SimSun / 黑体 / SimHei / 仿宋 / Arial）未安装，
+`.font {宋体}` 编译报 `Media path cannot be resolved`（strict 模式退出码 66）。
+
+**影响**：从引用未安装字体的 docx 提取模板时，脚本自带校验会失败（退出码 2，模板
+仍已生成）。脚本新增 `--no-verify` 可跳过校验；提示用户装字体或用 `--dry-run` 只看
+提取摘要。测试 fixture 刻意使用已安装字体（Times New Roman + 华文宋体）保证验收通过。
+
+**复现**：`printf '.docname {P}\n.doctype {paged}\n.font {宋体}\n# t\n' > /tmp/x.qd && quarkdown c /tmp/x.qd --strict --out /tmp/x` → `Media path cannot be resolved: 宋体`。
+
+## F8. 字体 fallback 链：第二个 `.font` 带 `heading:` 才覆盖标题 CJK
+
+`.font {Times New Roman} heading:{Times New Roman}` + `.font {华文宋体}` 时，生成的
+CSS 中标题字体族只有 Times New Roman（CJK 无法回退到华文宋体）；第二个 `.font` 加上
+`heading:{国标黑体}` 后，标题字体族变为 `国标黑体, Times New Roman`。因此脚本对
+标题 CJK 与正文 CJK 不同的 docx，第二个 `.font` 需要带 `heading:` 参数。
+
+**复现**：编译上述两种 `.font` 组合，检查输出 `index.html` 的
+`--qd-heading-custom-font` 值。
+
+## F9. `.numbering` 层级串按深度位置映射，标题文本的编号前缀保留尾随分隔符
+
+`.numbering - headings: 1.1.1` 实测：H1 → `1`、H2 → `1.1`、H3 → `1.1.1`（深度与
+格式串字符一一对应，见 A3 探针 H4 无编号）。单级 `1.` 链时 H1 渲染为 `1.`（尾随
+分隔符保留）；`1、1` 链时 H1 为 `1`（分隔符只在层间出现）。脚本据此构造链：取最深
+参与层的前缀结构，逐层校验"下一级前缀 = 上一级前缀 + 分隔符 + 计数器"，否则方案 B。
+
+**复现**：分别编译 `- headings: 1.` 与 `- headings: 1、1` 的 .qd，查 HTML `data-location`。
+
+## F10. docx 标题无显式 run 属性（加粗来自样式表）时按"常规"处理
+
+计划 §3 约定"遍历实际元素，不读样式定义表"。python-docx `add_heading` 的加粗来自
+Heading 样式而非 run 的 `<w:b/>`，因此不显式设 `run.font.bold` 的标题会被判定为
+"常规"。fixture 与说明均明确要求标题/正文显式设置 run 属性。
+
+**复现**：`doc.add_heading('x', 1)` 不加粗 → 提取摘要显示 H1 常规。
+
+## F11. 段落块 `.extend {paragraph}` 只聚合多数派样式，避免单 run 样式污染
+
+提取正文 run 级 bold/italic/underline/color 时，若仅个别 run 带样式（如一个红色
+下划线强调），按字符权重多数派判定不通过则该属性不进 `.extend {paragraph}`，防止
+整篇正文被误设为加粗/下划线/变色。
+
+**复现**：fixture mixed_numbering.docx 含一个红色下划线 run，生成的模板
+`.extend {paragraph}` 仅含 `textalignment:{justify}`。
+
+## F12. 测试沿用根级 `tests/` 而非 `skills/quarkdown/tests/`
+
+计划 §7 建议 `skills/quarkdown/tests/`，但注明"如仓库已有测试体系则沿用"（F5 同款
+约定）。本次沿用根级 `tests/`：
+- fixture：`tests/fixtures/mixed_numbering.docx`、`dec_numbering.docx`、
+  `gen_docx.py`（另附 `make_docx_fixtures.py` 生成器，便于重建）
+- 测试：`tests/test_extract_docx_style.py`（unit 编号决策树 + subprocess 端到端；
+  编译校验用例标 `integration`）
+- 新增 `pytest.ini` 的 `integration` 标记沿用既有注册，未改动。
+
+**复现**：`python -m pytest -q` 全绿（85 例，含新增 41 例）。

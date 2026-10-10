@@ -224,6 +224,7 @@ If the user wants to start a new Quarkdown project, tell them to run `quarkdown 
 |---|---|
 | `references/quick-reference.md` | Copy-paste syntax for the most common Quarkdown tasks, each with a link to the full wiki page for details. |
 | `scripts/md2pdf.py` | Convert a plain Markdown file to PDF via a generated Quarkdown template (see "Converting Markdown to PDF" below). |
+| `references/extract_docx_style.py` | Extract styles from a `.docx` (or a `.py` that generates one) into a reusable `.qd` template (see "Converting docx styles to a qd template" below). |
 
 ## Converting Markdown to PDF
 
@@ -242,3 +243,19 @@ python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...] [--page ...]
 - **Verify**: after the PDF is generated, spot-check the page count and a couple of headings / content in the output.
 
 Exit codes: `0` success, `1` input/argument error, `2` compilation failure, `3` output move failure.
+
+## Converting docx styles to a qd template
+
+Use `references/extract_docx_style.py` when the user hands you a **`.docx` file** (or a `.py` script that generates one) and wants a reusable Quarkdown template that reproduces its styling — fonts, sizes, colors, spacing, line height, indent, alignment, and heading numbering. The script extracts the effective formatting from the actual document elements (paragraphs/runs, including the CJK font from `w:rFonts w:eastAsia`) and writes a `.qd` template meant to be `.include`d by business documents.
+
+```bash
+python3 references/extract_docx_style.py <input.docx|input.py> [-o template.qd]
+    [--heading-levels 1-3] [--dry-run] [--no-verify]
+```
+
+- **Input** is a `.docx` to parse directly, or a `.py` generator script that is executed in a throwaway temp dir after an AST safety scan (rejects `rm`/shell commands, network imports, subprocess, and writes to absolute/`..` paths). The generated `.docx` is then parsed. If a `.py` script looks risky the script refuses to run it.
+- **Numbering convention**: Quarkdown's `.numbering` only supports decimal (`1`), letters (`a`/`A`) and Roman (`i`/`I`) counters in a single hierarchy string. Unsupported patterns — Chinese numerals (`（一）`, `一、`, `第一章`), mixed/independent per-level counters, or Word auto-numbering (`numPr`, which cannot be read as text) — fall back to **Plan B**: numbers are written into the heading text itself and qd auto-numbering is disabled via `numbered:{no}`. When every heading level uses a supported, hierarchical pattern (e.g. `1.` / `1.1` / `1.1.1`), the script emits `.numbering - headings: 1.1.1` instead.
+- **Coverage boundary**: only the "style spec family" is extracted. Tables, headers/footers, page-break control, fields, SmartArt, and text-box coordinates have no 1:1 mapping in Quarkdown and are not reproduced.
+- **Font size mapping**: qd's `fontsize` takes only relative enums (`tiny`–`huge`), so absolute sizes are set on the global `.font size:{N}pt` (body base) and heading sizes become the nearest enum (e.g. H1 22pt on a 12pt base → `larger`).
+- **Verify**: by default the script runs `quarkdown c template.qd --strict --out /tmp/quarkdown-verify` after generation (compile the same way as in the Workflow section). Use `--no-verify` to skip, and `--dry-run` to print only the extraction summary and plan A/B decision. A failed verification usually means a font referenced by the docx is not installed locally; install the font or pass `--no-verify`.
+- Exit codes: `0` success, `1` input/argument error (missing file, parse failure, risky `.py`), `2` output/verification error.

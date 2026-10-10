@@ -18,7 +18,8 @@ skills/
 ├── quarkdown/
 │   ├── SKILL.md              # author .qd documents (typeset HTML/PDF/slides/wikis)
 │   ├── references/
-│   │   └── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│   │   ├── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│   │   └── extract_docx_style.py # docx / docx-generator → reusable .qd template
 │   └── scripts/
 │       └── md2pdf.py             # plain Markdown → PDF via a generated .qd template
 └── qwenpaw/
@@ -96,6 +97,14 @@ up — the source `.md` is never modified):
 
 ```bash
 python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...] [--numbered on|off]
+```
+
+To turn a **`.docx`** (or a `.py` that generates one) into a reusable Quarkdown
+template — fonts, sizes, colors, paragraph spacing, alignment, and heading
+numbering — use the style extractor:
+
+```bash
+python3 references/extract_docx_style.py input.docx [-o template.qd] [--dry-run]
 ```
 
 ### QwenPaw (`skills/qwenpaw/`)
