@@ -223,3 +223,21 @@ If the user wants to start a new Quarkdown project, tell them to run `quarkdown 
 | File | Purpose |
 |---|---|
 | `references/quick-reference.md` | Copy-paste syntax for the most common Quarkdown tasks, each with a link to the full wiki page for details. |
+
+## Converting Markdown to PDF
+
+Use `references/md2pdf.py` when the user hands you a **plain Markdown** file and wants a quick PDF (printing, sharing, delivery) — without authoring a `.qd` file. The helper wraps the Markdown in a temporary Quarkdown template, compiles it to PDF, moves the PDF to the target path, and cleans up. **Your source `.md` is never modified.**
+
+```bash
+python3 references/md2pdf.py input.md [-o out.pdf] [--theme ...] [--page ...]
+    [--font ...] [--size 12] [--lineheight ...] [--spacing ...] [--indent ...]
+    [--heading-color ...] [--numbered on|off] [--heading-style 1:large,2:medium]
+    [--dry-run]
+```
+
+- Defaults: theme `paperwhite`, page `A4`, font `Noto Serif CJK SC` size `12pt`, lineheight `1.6`, spacing `0.5`, indent `0`.
+- **Numbering is off by default**: Markdown headings usually carry their own numbers (e.g. `（一）`, `1.`), and Quarkdown's native numbering has no Chinese numerals — enabling it would double-number. Use `--numbered on` only when the heading text has no number prefix.
+- **Plain-Markdown compatibility**: a line starting with `.` is parsed as a Quarkdown function call, and `$...$` may be parsed as math (`$100` renders fine in practice). The script never rewrites your content; if compilation fails it reports the error and points at likely offending lines.
+- **Verify**: after the PDF is generated, spot-check the page count and a couple of headings / content in the output.
+
+Exit codes: `0` success, `1` input/argument error, `2` compilation failure, `3` output move failure.

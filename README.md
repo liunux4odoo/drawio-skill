@@ -18,7 +18,8 @@ skills/
 ├── quarkdown/
 │   ├── SKILL.md              # author .qd documents (typeset HTML/PDF/slides/wikis)
 │   └── references/
-│       └── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│       ├── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│       └── md2pdf.py             # plain Markdown → PDF via a generated .qd template
 └── qwenpaw/
     ├── SKILL.md              # query QwenPaw agents' accumulated memory
     └── scripts/
@@ -86,6 +87,14 @@ Compile to verify (always `--strict`, output to a scratch dir):
 ```bash
 quarkdown c main.qd --strict --out /tmp/quarkdown-verify   # HTML
 quarkdown c main.qd --pdf --strict --out /tmp/quarkdown-verify  # PDF
+```
+
+To turn a **plain Markdown** file into a PDF without authoring `.qd`, use the
+bundled helper (it builds a temporary Quarkdown template, compiles, and cleans
+up — the source `.md` is never modified):
+
+```bash
+python3 references/md2pdf.py input.md [-o out.pdf] [--theme ...] [--numbered on|off]
 ```
 
 ### QwenPaw (`skills/qwenpaw/`)
