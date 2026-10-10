@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "skills" / "quarkdown" / "references" / "md2pdf.py"
+SCRIPT = ROOT / "skills" / "quarkdown" / "scripts" / "md2pdf.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "sample.md"
 
 

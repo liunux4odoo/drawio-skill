@@ -35,7 +35,7 @@
 
 ## 1. 功能目标（WHAT）
 
-新增脚本 `skills/quarkdown/references/md2pdf.py`，实现：
+新增脚本 `skills/quarkdown/scripts/md2pdf.py`，实现：
 
 **输入**：
 - 指定的纯 Markdown 文件（`.md`，任意路径）
@@ -159,7 +159,7 @@ md2pdf: 成功
 ## 5. 脚本接口（WHAT）
 
 ```
-python3 skills/quarkdown/references/md2pdf.py <input.md> \
+python3 skills/quarkdown/scripts/md2pdf.py <input.md> \
     [-o output.pdf] \
     [--title <标题>] \
     [--lang <语言>] \
@@ -187,7 +187,7 @@ python3 skills/quarkdown/references/md2pdf.py <input.md> \
 
 - `## Converting Markdown to PDF`：
   - 何时用：用户给纯 md 要 PDF（快速打印/交付）
-  - 用法：`python3 references/md2pdf.py input.md [-o out.pdf] [--theme ...]`
+  - 用法：`python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...]`
   - 编号默认关闭（方案 B，理由一句话）
   - md 兼容性提示（§3.2 表格精简版）
   - 校验：输出 PDF 后抽查页数/内容
@@ -222,32 +222,32 @@ python3 skills/quarkdown/references/md2pdf.py <input.md> \
 
 ```bash
 # 1. 脚本语法
-python3 -m py_compile skills/quarkdown/references/md2pdf.py
+python3 -m py_compile skills/quarkdown/scripts/md2pdf.py
 
 # 2. 默认参数生成 PDF（fixture 纯 md）
-python3 skills/quarkdown/references/md2pdf.py tests/fixtures/sample.md -o /tmp/_out.pdf
+python3 skills/quarkdown/scripts/md2pdf.py tests/fixtures/sample.md -o /tmp/_out.pdf
 # 期望：退出码 0，/tmp/_out.pdf 存在且非空
 
 # 3. dry-run（不编译）
-python3 skills/quarkdown/references/md2pdf.py tests/fixtures/sample.md --dry-run
+python3 skills/quarkdown/scripts/md2pdf.py tests/fixtures/sample.md --dry-run
 # 期望：输出模板头含 .docname/.theme/.font/.extend，且含 numbered:{no}
 
 # 4. 自定义参数
-python3 skills/quarkdown/references/md2pdf.py tests/fixtures/sample.md \
+python3 skills/quarkdown/scripts/md2pdf.py tests/fixtures/sample.md \
     --title 自定义 --theme darko --page A5 --font Noto Sans CJK SC \
     --size 10 --heading-color navy --heading-style 1:large,2:medium \
     -o /tmp/_out2.pdf
 # 期望：退出码 0，PDF 存在
 
 # 5. 自动编号模式
-python3 skills/quarkdown/references/md2pdf.py tests/fixtures/sample.md --numbered on -o /tmp/_out3.pdf
+python3 skills/quarkdown/scripts/md2pdf.py tests/fixtures/sample.md --numbered on -o /tmp/_out3.pdf
 # 期望：模板头含 .numbering - headings: ...（标题文本无编号前缀的 fixture）
 
 # 6. 源文件未被修改
 sha256sum tests/fixtures/sample.md   # 前后一致（测试内断言）
 
 # 7. 错误处理（不存在的文件）
-python3 skills/quarkdown/references/md2pdf.py /tmp/nonexistent.md
+python3 skills/quarkdown/scripts/md2pdf.py /tmp/nonexistent.md
 # 期望：退出码 1，错误信息明确
 
 # 8. 文档残留检查

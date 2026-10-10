@@ -223,13 +223,14 @@ If the user wants to start a new Quarkdown project, tell them to run `quarkdown 
 | File | Purpose |
 |---|---|
 | `references/quick-reference.md` | Copy-paste syntax for the most common Quarkdown tasks, each with a link to the full wiki page for details. |
+| `scripts/md2pdf.py` | Convert a plain Markdown file to PDF via a generated Quarkdown template (see "Converting Markdown to PDF" below). |
 
 ## Converting Markdown to PDF
 
-Use `references/md2pdf.py` when the user hands you a **plain Markdown** file and wants a quick PDF (printing, sharing, delivery) — without authoring a `.qd` file. The helper wraps the Markdown in a temporary Quarkdown template, compiles it to PDF, moves the PDF to the target path, and cleans up. **Your source `.md` is never modified.**
+Use `scripts/md2pdf.py` when the user hands you a **plain Markdown** file and wants a quick PDF (printing, sharing, delivery) — without authoring a `.qd` file. The helper wraps the Markdown in a temporary Quarkdown template, compiles it to PDF, moves the PDF to the target path, and cleans up. **Your source `.md` is never modified.**
 
 ```bash
-python3 references/md2pdf.py input.md [-o out.pdf] [--theme ...] [--page ...]
+python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...] [--page ...]
     [--font ...] [--size 12] [--lineheight ...] [--spacing ...] [--indent ...]
     [--heading-color ...] [--numbered on|off] [--heading-style 1:large,2:medium]
     [--dry-run]

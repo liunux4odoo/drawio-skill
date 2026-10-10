@@ -17,8 +17,9 @@ skills/
 │       └── patterns.md           # copy-paste patterns + full style catalog
 ├── quarkdown/
 │   ├── SKILL.md              # author .qd documents (typeset HTML/PDF/slides/wikis)
-│   └── references/
-│       ├── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│   ├── references/
+│   │   └── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
+│   └── scripts/
 │       └── md2pdf.py             # plain Markdown → PDF via a generated .qd template
 └── qwenpaw/
     ├── SKILL.md              # query QwenPaw agents' accumulated memory
@@ -94,7 +95,7 @@ bundled helper (it builds a temporary Quarkdown template, compiles, and cleans
 up — the source `.md` is never modified):
 
 ```bash
-python3 references/md2pdf.py input.md [-o out.pdf] [--theme ...] [--numbered on|off]
+python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...] [--numbered on|off]
 ```
 
 ### QwenPaw (`skills/qwenpaw/`)
