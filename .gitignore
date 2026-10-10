@@ -16,5 +16,11 @@ venv/
 *.drawio.svg
 *.drawio.png
 
+# Quarkdown preview output
+output/
+
+# Scratch demo file
+example.qd
+
 # QwenPaw skill runtime logs (defensive; scripts disable file logging anyway)
 skills/qwenpaw/logs/
