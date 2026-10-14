@@ -73,6 +73,8 @@ Hello, **.name**!              # access
 ## Math
 
 ```markdown
+# IMPORTANT — the $ delimiters MUST be surrounded by whitespace or the formula won't render:
+#   $ E = mc^2 $     (correct, renders)     vs     $E = mc^2$     (wrong, stays plain text)
 Inline:  $ E = mc^2 $
 Block:   $ f(x, y) = \frac{x}{y} $      # isolated on its own line → block
 
@@ -85,6 +87,13 @@ f(x) =
 \end{cases}
 $$$
 ```
+
+> **IMPORTANT — spaces around `$` are mandatory.** Both `$` delimiters must be preceded **and** followed by whitespace (or start/end of line), otherwise Quarkdown does not recognize the formula and renders it as plain text:
+>
+> - Correct: `$ E = mc^2 $` → renders as math
+> - Wrong: `$E = mc^2$` → **not** rendered, stays plain text
+>
+> A one-line block formula must also be isolated on its own line with blank lines around it, or Markdown lazy lines turn it into inline math.
 
 - Cross-reference an equation: `$ E = mc^2 $ {#energy}` then `.ref {energy}`.
 - **Learn more:** [tex-formulae.qd](tex-formulae.qd).

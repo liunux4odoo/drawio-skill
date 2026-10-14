@@ -13,6 +13,10 @@ Use this skill when the user wants to write or edit a `.qd` file, or asks for ty
 
 Do **not** use it when plain Markdown is the final target (chat, READMEs, GitHub issues).
 
+## Math formulas: spaces around `$` are required
+
+`$`-delimited TeX formulas **only render when both `$` delimiters are surrounded by whitespace** (or start/end of line). Write `$ E = mc^2 $`, never `$E = mc^2$` — without the spaces Quarkdown does not recognize the formula and renders it as plain text. A one-line block formula must additionally be isolated on its own line with blank lines around it, or Markdown lazy lines turn it into inline math. Always compile with `quarkdown c <main>.qd --strict` to verify. See the **Math** section of `references/quick-reference.md` and [tex-formulae.qd](tex-formulae.qd) for details.
+
 ## How to use this skill
 
 - **`references/quick-reference.md`** (same directory): copy-paste syntax for the most common tasks — document setup, math, figures, tables, cross-references, layout, slides, includes. Start here; most documents need nothing else.
@@ -56,7 +60,7 @@ Every capability below maps to a page in `$QUARKDOWN_INSTALL/docs/wiki/`. Read t
 | You want to... | Wiki page |
 |---|---|
 | Images with size/caption (figures) | [image-size.qd](image-size.qd), [figure.qd](figure.qd) → quick-ref |
-| TeX equations (`$ ... $`, `$$$`) | [tex-formulae.qd](tex-formulae.qd) → quick-ref |
+| TeX equations (`$ ... $`, `$$$`) — **spaces around `$` are required** (see "Math formulas" above) | [tex-formulae.qd](tex-formulae.qd) → quick-ref |
 | Table caption | [table-caption.qd](table-caption.qd) |
 | Code caption | [code-caption.qd](code-caption.qd) |
 | Decorative headings (`#!`) | [decorative-headings.qd](decorative-headings.qd) |
@@ -211,6 +215,7 @@ If the user wants to start a new Quarkdown project, tell them to run `quarkdown 
 
 ## Troubleshooting
 
+- **Formula renders as plain text instead of math** — the `$` delimiters lack surrounding whitespace. Write `$ E = mc^2 $`, not `$E = mc^2$`; a one-line block formula must also be isolated on its own line (blank line around it), otherwise Markdown lazy lines treat it as inline.
 - **`quarkdown` command not found** — Quarkdown is not on `PATH` (or not installed). Check `quarkdown doctor` exists under the install dir, or ask the user how they invoke it.
 - **PDF fails with `Chrome executable cannot be found at 'chrome-headless-shell'`** — PDF export needs a Chromium-family browser on the machine. Install one, or point Quarkdown at it explicitly: `quarkdown c main.qd --pdf --chrome-path /path/to/chrome`.
 - **PDF fails with a Chrome sandbox error** — some environments block the Chromium sandbox. Retry with `--pdf-no-sandbox` (unsafe, only as a fallback).
