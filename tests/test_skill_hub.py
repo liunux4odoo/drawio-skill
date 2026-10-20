@@ -746,16 +746,17 @@ def test_v1_registry_auto_migrates_on_load(patch_download, capsys):
     err = capsys.readouterr().err
     assert "schema_version" not in err
 
-    # First write verb triggers the notice
+    # First write verb triggers the notice (v1 -> v2 -> v3 chained)
     rc = run(mod, "remove", "alpha", "--purge")  # alpha has no installs, safe
     assert rc == 0
     err = capsys.readouterr().err
-    assert "schema_version 2" in err
+    assert "schema_version 3" in err
 
-    # File is now persisted at v2
+    # File is now persisted at v3
     reg = json.loads(mod.registry_path().read_text())
-    assert reg["schema_version"] == 2
+    assert reg["schema_version"] == 3
     assert "bundles" in reg
+    assert "agents" in reg
     assert "alpha" not in reg["skills"]  # remove took effect during migration
     # Surviving skill got backfilled with v2-only fields
     assert reg["skills"]["beta"]["source_bundle"] is None
@@ -818,3 +819,226 @@ def test_registry_path_override_via_env(tmp_path, monkeypatch):
 
     assert mod.registry_path() == custom_home / "registry.json"
     assert mod.store_dir() == custom_store
+
+
+# ---------- v0.4: agent aliases ----------
+
+
+def _add_demo(mod, urls, name="demo"):
+    assert run(mod, "add", name, urls["v1"]) == 0
+
+
+def test_agents_list_shows_builtin_defaults(patch_download, capsys):
+    _, mod, _, _ = patch_download
+    rc = run(mod, "agents", "list")
+    assert rc == 0
+    out = capsys.readouterr().out
+    for alias in ("qwenpaw", "claude", "codex", "gemini", "opencode", "cursor",
+                  "copilot", "qwen-code", "codebuddy", "iflow", "qoder", "trae"):
+        assert alias in out, f"missing builtin alias {alias}"
+    # qwenpaw is the only builtin that defaults to copy
+    assert "qwenpaw\tQwenPaw\tcopy\tbuiltin" in out
+    assert "claude\tClaude Code\tlink\tbuiltin" in out
+
+
+def test_agent_prefers_project_dir_over_user_dir(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    proj = tmp_path / "proj"
+    (proj / ".claude" / "skills").mkdir(parents=True)
+    (Path(os.environ["HOME"]) / ".claude" / "skills").mkdir(parents=True)
+    monkeypatch.chdir(proj)
+    rc = run(mod, "install", "demo", "--agent", "claude")
+    assert rc == 0
+    assert (proj / ".claude" / "skills" / "demo").is_symlink()
+    assert not (Path(os.environ["HOME"]) / ".claude" / "skills" / "demo").exists()
+
+
+def test_agent_falls_back_to_user_dir(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    user_skills = Path(os.environ["HOME"]) / ".claude" / "skills"
+    user_skills.mkdir(parents=True)
+    monkeypatch.chdir(proj)
+    rc = run(mod, "install", "demo", "--agent", "claude")
+    assert rc == 0
+    assert (user_skills / "demo").is_symlink()
+
+
+def test_agent_skips_candidates_with_unset_env(patch_download, tmp_path, monkeypatch):
+    """QWENPAW_WORKING_DIR unset -> those candidates are skipped, not fatal."""
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.delenv("QWENPAW_WORKING_DIR", raising=False)
+    monkeypatch.delenv("QWENPAW_AGENT_ID", raising=False)
+    pool = Path(os.environ["HOME"]) / ".qwenpaw" / "skill_pool"
+    pool.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    rc = run(mod, "install", "demo", "--agent", "qwenpaw")
+    assert rc == 0
+    assert (pool / "demo").is_dir() and not (pool / "demo").is_symlink()
+
+
+def test_agent_env_default_syntax(patch_download, tmp_path, monkeypatch):
+    """${VAR:-fallback} resolves to the fallback when VAR is unset."""
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.delenv("NO_SUCH_VAR_FOR_TEST", raising=False)
+    target = tmp_path / "fallback-skills"
+    target.mkdir()
+    rc = run(mod, "agents", "add", "custom", f"${{NO_SUCH_VAR_FOR_TEST:-{target}}}")
+    assert rc == 0
+    rc = run(mod, "install", "demo", "--agent", "custom")
+    assert rc == 0
+    assert (target / "demo").is_symlink()
+
+
+def test_agent_no_candidate_exists_errors(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    # Move HOME before add so the registry lands in the (empty) new home
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    (tmp_path / "empty-home").mkdir()
+    _add_demo(mod, urls)
+    monkeypatch.chdir(tmp_path)
+    rc = run(mod, "install", "demo", "--agent", "codex")
+    assert rc == 1
+
+
+def test_agent_create_makes_first_candidate(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    (tmp_path / "empty-home").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    _add_demo(mod, urls)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    rc = run(mod, "install", "demo", "--agent", "claude", "--create")
+    assert rc == 0
+    # First candidate for claude is {cwd}/.claude/skills
+    assert (proj / ".claude" / "skills" / "demo").is_symlink()
+
+
+def test_agent_default_mode_link_and_copy_override(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.chdir(tmp_path)
+    user_skills = Path(os.environ["HOME"]) / ".claude" / "skills"
+    user_skills.mkdir(parents=True)
+    # default = link
+    assert run(mod, "install", "demo", "--agent", "claude") == 0
+    assert (user_skills / "demo").is_symlink()
+    # explicit --copy overrides
+    assert run(mod, "install", "demo", "--agent", "claude", "--copy") == 0
+    assert (user_skills / "demo").is_dir() and not (user_skills / "demo").is_symlink()
+    # registry records the agent and the copy mode
+    reg = json.loads(mod.registry_path().read_text())
+    entry = [i for i in reg["installs"]["demo"] if i["target"] == str(user_skills / "demo")][0]
+    assert entry["mode"] == "copy" and entry["agent"] == "claude"
+
+
+def test_agent_copy_override_to_link(patch_download, tmp_path, monkeypatch):
+    """qwenpaw defaults to copy; --link must win when asked."""
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.delenv("QWENPAW_WORKING_DIR", raising=False)
+    pool = Path(os.environ["HOME"]) / ".qwenpaw" / "skill_pool"
+    pool.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    assert run(mod, "install", "demo", "--agent", "qwenpaw", "--link") == 0
+    assert (pool / "demo").is_symlink()
+
+
+def test_install_at_alias_sugar(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.chdir(tmp_path)
+    user_skills = Path(os.environ["HOME"]) / ".cursor" / "skills"
+    user_skills.mkdir(parents=True)
+    assert run(mod, "install", "demo", "@cursor") == 0
+    assert (user_skills / "demo").is_symlink()
+
+
+def test_agents_add_custom_alias(patch_download, tmp_path):
+    _, mod, _, _ = patch_download
+    p1 = tmp_path / "p1"
+    p2 = tmp_path / "p2"
+    rc = run(mod, "agents", "add", "my-agent", str(p1), str(p2), "--mode", "copy", "--label", "Mine")
+    assert rc == 0
+    agents = mod.effective_agents(json.loads(mod.registry_path().read_text()))
+    assert agents["my-agent"]["paths"] == [str(p1), str(p2)]
+    assert agents["my-agent"]["mode"] == "copy"
+    assert agents["my-agent"]["label"] == "Mine"
+    assert agents["my-agent"]["builtin"] is False
+
+
+def test_agents_add_defaults_to_link(patch_download, tmp_path):
+    _, mod, _, _ = patch_download
+    assert run(mod, "agents", "add", "nolink", str(tmp_path / "x")) == 0
+    agents = mod.effective_agents(json.loads(mod.registry_path().read_text()))
+    assert agents["nolink"]["mode"] == "link"
+
+
+def test_agents_add_overrides_builtin_paths(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    custom = tmp_path / "custom-claude"
+    custom.mkdir()
+    assert run(mod, "agents", "add", "claude", str(custom)) == 0
+    monkeypatch.chdir(tmp_path)
+    assert run(mod, "install", "demo", "--agent", "claude") == 0
+    assert (custom / "demo").is_symlink()
+
+
+def test_agents_remove_builtin_tombstones(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    monkeypatch.chdir(tmp_path)
+    assert run(mod, "agents", "remove", "claude") == 0
+    assert "claude" not in mod.effective_agents(json.loads(mod.registry_path().read_text()))
+    rc = run(mod, "install", "demo", "--agent", "claude")
+    assert rc == 1
+
+
+def test_agents_reset_restores_builtin(patch_download):
+    _, mod, _, _ = patch_download
+    assert run(mod, "agents", "remove", "claude") == 0
+    assert run(mod, "agents", "reset", "claude") == 0
+    assert "claude" in mod.effective_agents(json.loads(mod.registry_path().read_text()))
+
+
+def test_agents_reset_all(patch_download, tmp_path):
+    _, mod, _, _ = patch_download
+    run(mod, "agents", "remove", "claude")
+    run(mod, "agents", "add", "x", str(tmp_path / "y"))
+    assert run(mod, "agents", "reset") == 0
+    agents = mod.effective_agents(json.loads(mod.registry_path().read_text()))
+    assert "claude" in agents and "x" not in agents
+
+
+def test_unknown_agent_alias_rejected(patch_download, tmp_path, monkeypatch):
+    _, mod, _, _ = patch_download
+    monkeypatch.chdir(tmp_path)
+    rc = run(mod, "install", "anything", "--agent", "nope")
+    assert rc == 1
+
+
+def test_v2_registry_migrates_to_v3(patch_download, capsys):
+    _, mod, _, urls = patch_download
+    rp = mod.registry_path()
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({
+        "schema_version": 2,
+        "skills": {},
+        "installs": {},
+        "bundles": {},
+    }), encoding="utf-8")
+    assert run(mod, "list") == 0
+    assert "agents" not in json.loads(rp.read_text())  # read-only: not rewritten
+    assert "schema_version" not in capsys.readouterr().err
+    _add_demo(mod, urls)  # first write verb
+    reg = json.loads(rp.read_text())
+    assert reg["schema_version"] == 3
+    assert reg["agents"] == {}
+    assert "v2->v3" in capsys.readouterr().err

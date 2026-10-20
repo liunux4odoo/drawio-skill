@@ -1,6 +1,6 @@
 ---
 name: skill-hub
-description: Install and maintain skills from user-specified URLs (tarballs). Use when the user wants to add a new skill or skill bundle from a URL, update installed skills to the latest version (with HTTP HEAD fast path), install/link/copy a registered skill into a target directory, remove a skill from the registry, or list/status the skill registry. Does NOT search, discover, or recommend skills — only maintains a user-curated set.
+description: Install and maintain skills from user-specified URLs (tarballs). Use when the user wants to add a new skill or skill bundle from a URL, update installed skills to the latest version (with HTTP HEAD fast path), install/link/copy a registered skill into a target directory or a known agent's default skills folder (qwenpaw / claude / codex / gemini / opencode / cursor / copilot / qwen-code / codebuddy / iflow / qoder / trae), remove a skill from the registry, or list/status the skill registry. Does NOT search, discover, or recommend skills — only maintains a user-curated set.
 ---
 
 # Skill Hub
@@ -23,7 +23,7 @@ Do **not** use it for: searching, browsing, rating, or recommending skills; modi
 
 | Path | Purpose |
 |---|---|
-| `~/.config/skill-hub/registry.json` | Single source of truth: URLs, SHA-256 versions, ETag/Last-Modified hints, install targets and modes, bundle metadata. |
+| `~/.config/skill-hub/registry.json` | Single source of truth: URLs, SHA-256 versions, ETag/Last-Modified hints, install targets and modes, bundle metadata, user edits to the agent alias table. |
 | `~/.local/share/skill-hub/skills/<name>/` | Central source pool: extracted tarball contents. |
 | `<target>` (e.g. an agent's `skills/<name>/`) | Install point. Either a symlink to the store (default) or a recursive copy. |
 
@@ -56,7 +56,7 @@ When `add` is called without a `<name>` argument, the helper picks a registry ke
 
 The explicit name (when given) always wins. Passing a name for a bundle URL is an error (since the bundle will register multiple skills, none of which would match the supplied name).
 
-## Update flow (v0.2)
+## Update flow
 
 1. `HTTP HEAD` on each skill's URL. The helper caches the first-seen `ETag` and `Last-Modified` in the registry after each add/update.
 2. If the server returns the same `ETag` (or same `Last-Modified`) as the registry, the helper reports `up-to-date` and **does not download** the tarball.
@@ -78,6 +78,11 @@ python3 scripts/skill_hub.py add [<name>] <tarball-url>
 python3 scripts/skill_hub.py install <name> <target-path>
 python3 scripts/skill_hub.py install <name> <target-path> --copy
 
+# 2b. Install via an agent alias (first existing candidate dir wins)
+python3 scripts/skill_hub.py install <name> --agent <alias>
+python3 scripts/skill_hub.py install <name> @<alias>
+python3 scripts/skill_hub.py install <name> --agent <alias> --create   # make candidate #1 if none exists
+
 # 3. Update everything (or one skill)
 python3 scripts/skill_hub.py update              # all registered skills
 python3 scripts/skill_hub.py update <name>       # one skill
@@ -92,9 +97,67 @@ python3 scripts/skill_hub.py uninstall <name> <target-path>
 # 6. Drop a skill from the registry (requires all install points uninstalled first)
 python3 scripts/skill_hub.py remove <name>
 python3 scripts/skill_hub.py remove <name> --purge   # also delete the store copy
+
+# 7. Agent alias table
+python3 scripts/skill_hub.py agents list
+python3 scripts/skill_hub.py agents add <alias> <path> [<path>...] [--mode link|copy] [--label NAME]
+python3 scripts/skill_hub.py agents remove <alias>
+python3 scripts/skill_hub.py agents reset [<alias>]
 ```
 
 Exit codes: `0` success, `1` input/argument/registry error, `2` I/O error (network, extract, link).
+
+## Agent aliases (install target shorthand)
+
+Instead of spelling out a target path, `install` accepts an agent alias: `--agent <alias>` or the `@<alias>` sugar. Each alias carries an **ordered** list of candidate skills directories; the **first candidate that already exists wins**. That is what makes one alias work for both "current project" and "user-global" without asking which one you meant.
+
+```bash
+python3 scripts/skill_hub.py install docx --agent claude   # first existing candidate
+python3 scripts/skill_hub.py install docx @claude           # same thing
+python3 scripts/skill_hub.py install docx --agent claude --create  # create candidate #1
+```
+
+Path templates support `{cwd}` (current directory), `${VAR}`, `${VAR:-default}`, and `~`. A candidate whose env var is unset **and has no default** is skipped, not fatal.
+
+Built-in aliases (verified against vendor docs on 2026-10-20; paths in priority order):
+
+| Alias | Agent | Candidate paths (first existing wins) | Mode |
+|---|---|---|---|
+| `qwenpaw` | QwenPaw | `${QWENPAW_WORKING_DIR}/skill_pool`, `~/.qwenpaw/skill_pool`, then workspace-local `…/workspaces/${QWENPAW_AGENT_ID}/skills` | **copy** |
+| `claude` | Claude Code | `{cwd}/.claude/skills`, `~/.claude/skills` | link |
+| `codex` | Codex CLI | `{cwd}/.agents/skills`, `{cwd}/.codex/skills`, `~/.agents/skills`, `~/.codex/skills`, `/etc/codex/skills` | link |
+| `gemini` | Gemini CLI | `{cwd}/.gemini/skills`, `{cwd}/.agents/skills`, `~/.gemini/skills`, `~/.agents/skills` | link |
+| `opencode` | OpenCode | `{cwd}/.opencode/skills`, `{cwd}/.claude/skills`, `{cwd}/.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` | link |
+| `cursor` | Cursor | `{cwd}/.cursor/skills`, `{cwd}/.agents/skills`, `{cwd}/.claude/skills`, `{cwd}/.codex/skills`, `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills` | link |
+| `copilot` | GitHub Copilot | `{cwd}/.github/skills`, `{cwd}/.claude/skills`, `{cwd}/.agents/skills`, `~/.copilot/skills`, `~/.agents/skills` | link |
+| `qwen-code` | Qwen Code (阿里) | `{cwd}/.qwen/skills`, `~/.qwen/skills` | link |
+| `codebuddy` | CodeBuddy (腾讯) | `{cwd}/.codebuddy/skills`, `~/.codebuddy/skills` | link |
+| `iflow` | iFlow CLI (心流) | `{cwd}/.iflow/skills`, `~/.iflow/skills` | link |
+| `qoder` | Qoder (阿里) | `{cwd}/.qoder/skills`, `~/.qoder/skills` | link |
+| `trae` | Trae (字节) | `{cwd}/.trae/skills`, `~/.trae/skills` | link |
+
+Sources for the paths (re-check here before changing a row): QwenPaw `docs/config.en.md#directory-structure`; Claude Code skills docs; `developers.openai.com/codex/skills`; `geminicli.com/docs/cli/skills`; `opencode.ai/docs/skills`; `QwenLM/qwen-code docs/users/features/skills.md`; `docs.github.com/copilot/concepts/agents/about-agent-skills`; `cursor.com/docs/skills`; `cloud.tencent.com/document/product/1831/137020`; `platform.iflow.cn/en/docs/skill`; `docs.qoder.com/extensions/skills`; `docs.trae.ai/ide/skills`.
+
+Agents that have **no** Agent Skills directory (rules-file-only tools such as Windsurf/Cline-style `.rules` setups) are deliberately absent — there is nothing to point at. Add your own alias only when the vendor documents a skills directory.
+
+QwenPaw is the only built-in that defaults to **copy**: its pool is manifest-managed (`skill.json`), and a symlink into the pool can desync manifest from layout. Everyone else defaults to **link**, and `--link` / `--copy` always override the alias's own mode.
+
+The project-local candidates only win when they exist. If you are in a repo with `.claude/skills`, `@claude` means that repo's folder; otherwise it means `~/.claude/skills`. If none exist, `install` fails with the full candidate list rather than guessing.
+
+### Managing the alias table
+
+Built-ins live in the script (`DEFAULT_AGENTS`); user edits live in `registry.json` under `agents`, so upgrading skill-hub still delivers new built-ins.
+
+```bash
+python3 scripts/skill_hub.py agents list                       # aliases + resolved status
+python3 scripts/skill_hub.py agents add myagent ~/skills/mine  # add a custom alias (mode defaults to link)
+python3 scripts/skill_hub.py agents add claude ~/alt/skills --mode copy   # override a built-in
+python3 scripts/skill_hub.py agents remove trae                # built-in -> tombstone; custom -> gone
+python3 scripts/skill_hub.py agents reset trae                 # drop the override (restore built-in)
+python3 scripts/skill_hub.py agents reset                      # drop ALL overrides
+```
+
+`agents add` replaces the alias's path list wholesale (not append). Re-running with new paths is the supported way to reorder priority. Adding an alias that was tombstoned revives it.
 
 ## Removing skills (`remove` vs `uninstall`)
 
@@ -125,6 +188,7 @@ The registry carries `schema_version`. `load_registry()` upgrades older registri
 | From → To | What changes |
 |---|---|
 | `1 → 2` | add `bundles` map; backfill `source_bundle=null`, `etag=null`, `last_modified=null` on every skill (first `update` after migration falls through to the SHA-256 path once) |
+| `2 → 3` | add the `agents` override map (empty = pure built-in alias table) |
 
 Failure modes are explicit, never silent:
 
@@ -138,7 +202,7 @@ Failure modes are explicit, never silent:
 2. **Ask for a URL** if the user has not provided one. The skill does not search.
 3. **Run `add`**. Omit `<name>` whenever possible — the helper will read the skill's own `SKILL.md` or fall back to the URL basename. If `add` prints "added 'alpha' (from bundle) …", the URL was a bundle and multiple skills were registered at once.
 4. **Confirm** with `list` or `status <name>` (shows URL, installed version, latest version, install points).
-5. **Run `install`** for each target the user wants. Default is `link` — point multiple targets (different agents, projects) at the same store entry without duplicating files. Use `--copy` when the target cannot host a symlink (e.g. some synced/remote filesystems, sandboxed locations).
+5. **Run `install`** for each target the user wants. Default is `link` — point multiple targets (different agents, projects) at the same store entry without duplicating files. Use `--copy` when the target cannot host a symlink (e.g. some synced/remote filesystems, sandboxed locations). If the user names an agent instead of a path ("install it into Cursor"), use `--agent <alias>` — do **not** ask them for the path, and do not invent one.
 6. **Update**: when the user says "update skills" or "refresh skill X", run `update`. The helper tries HEAD first; if HEAD confirms the remote is unchanged, no download happens. If HEAD is missing or differs, it downloads the tarball and compares SHA-256, then refreshes every install point.
 7. **Uninstall** when a target is no longer needed; the store entry stays so the skill can be re-installed without re-downloading.
 8. **Remove** when the skill should disappear from the registry. If it still has install points, the helper refuses and lists them — uninstall those first, then re-run `remove` (add `--purge` to also delete the store copy).
@@ -150,6 +214,8 @@ Failure modes are explicit, never silent:
 - The helper **never deletes the registry entry** while install points still exist; the gate is hard (exit 1), not a warning.
 - The helper **never overwrites a non-empty target** that is not a symlink or directory of the same skill. It will fail rather than wipe an unrelated directory.
 - **Name collisions** are explicit errors: `add foo <url>` fails with exit code 1 if `foo` is already registered, with the original source URL in the error message. Bundles never auto-namespace — if a bundle contains a child whose `SKILL.md` name already exists in the registry, the whole `add` fails and no skill is registered.
+- **Alias installs never create directories implicitly.** If no candidate exists, the command fails and lists them; `--create` is required to create the first candidate.
+- **`agents add` replaces** the alias's path list; it does not append. Built-ins are never edited in place — the override is stored in the registry and `agents reset` removes it.
 - `link` mode: removing the symlink does **not** affect the store; re-installing recreates it.
 - `copy` mode: the target is a true duplicate; updates replace its contents.
 - Network access is required only for `add` and `update` (and `status` when HEAD fails); `list`, `status` (with HEAD hit), `install`, `uninstall` are fully offline once the store is populated.
@@ -158,5 +224,5 @@ Failure modes are explicit, never silent:
 
 | File | Purpose |
 |---|---|
-| `references/quick-reference.md` | Copy-paste cheat sheet for the seven subcommands, with typical one-liners and the registry schema. |
-| `scripts/skill_hub.py` | Pure-stdlib Python helper (~28 KB). Single file, no install, no dependencies. |
+| `references/quick-reference.md` | Copy-paste cheat sheet for every subcommand, the agent alias table, and the registry schema. |
+| `scripts/skill_hub.py` | Pure-stdlib Python helper (~43 KB). Single file, no install, no dependencies. |

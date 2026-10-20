@@ -8,7 +8,10 @@ Store:    ~/.local/share/skill-hub/skills/   (overridable via SKILL_HUB_DATA)
 
 Subcommands:
     add [name] <url>            register + download; name inferred if omitted
-    install <name> <target>     link (default) or copy store -> target
+    install <name> [target]     link (default) or copy store -> target;
+                                `--agent <alias>` resolves the target from the
+                                agent alias table (first existing candidate),
+                                `--create` creates candidate #1 if none exist
     update [name]               re-check; refresh every install point
     list                        print registry contents
     status <name>               show installed vs latest, install points
@@ -16,6 +19,10 @@ Subcommands:
     remove <name> [--purge]     drop a skill from the registry; --purge also
                                 deletes the store (install points must already
                                 be uninstalled)
+    agents list|add|remove|reset
+                                inspect / extend / delete / restore the agent
+                                alias table (built-ins live in DEFAULT_AGENTS,
+                                user edits live in registry["agents"])
 
 Exit codes:
     0  success
@@ -35,11 +42,19 @@ Update flow (v0.2):
     4. If SHA-256 unchanged -> skip extract, just update timestamp
     5. If SHA-256 changed -> replace store + re-link/re-copy installs
 
-Schema migration (v0.3):
+Schema migration (v0.3, extended in v0.4):
     The registry carries a schema_version field. On load, any older version
     is upgraded in-memory via MIGRATIONS and rewritten to disk the next time
     a save verb runs. Newer versions than the running tool errors out (the
-    user must upgrade skill-hub).
+    user must upgrade skill-hub). v1->v2 added bundles; v2->v3 added the
+    agent alias override map.
+
+Agent aliases (v0.4):
+    DEFAULT_AGENTS below is the authoritative reference table of common
+    agents' skills directories (verified against vendor docs, sources in
+    each entry's `docs` field). Candidate paths are ordered; install picks
+    the first that exists. Paths support {cwd}, ${VAR}, ${VAR:-default}, ~.
+    Overrides (add/remove/reset) live in registry["agents"], never in code.
 """
 from __future__ import annotations
 
@@ -59,7 +74,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 1
 EXIT_IO_ERROR = 2
@@ -67,11 +82,136 @@ EXIT_IO_ERROR = 2
 CHUNK = 65536
 DEFAULT_TIMEOUT = 60  # seconds
 BUNDLE_DIR_NAME = "skills"
-USER_AGENT = "skill-hub/1.3"
+USER_AGENT = "skill-hub/1.4"
+DEFAULT_AGENT_MODE = "link"   # user-added agents default to link
+CWD_TOKEN = "{cwd}"
 
 FRONTMATTER_NAME_RE = re.compile(r"^name:\s*([A-Za-z0-9._\-]+)\s*$", re.MULTILINE)
 URL_BASENAME_RE = re.compile(r"^.*?([^/]+?)(?:\.tar\.gz|\.tgz|\.zip)(?:\?.*)?$", re.IGNORECASE)
 SUFFIX_SKILL_RE = re.compile(r"[-_]?skills?$", re.IGNORECASE)
+ENV_TOKEN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+# Built-in agent aliases: path candidates are tried in order, first one that
+# already exists wins. `{cwd}` = current working directory (project scope).
+# Every path below was verified against the vendor's own docs on 2026-10-20;
+# the docs URL is kept next to each entry so a future reader can re-check.
+# Users override / extend / delete these via the `agents` subcommands; their
+# edits live in registry.json under "agents" (built-ins stay in code, so
+# upgrading skill-hub still contributes new defaults).
+DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
+    "qwenpaw": {
+        "label": "QwenPaw",
+        "paths": [
+            "${QWENPAW_WORKING_DIR}/skill_pool",
+            "~/.qwenpaw/skill_pool",
+            "${QWENPAW_WORKING_DIR}/workspaces/${QWENPAW_AGENT_ID}/skills",
+            "~/.qwenpaw/workspaces/${QWENPAW_AGENT_ID}/skills",
+        ],
+        # copy: the pool is a manifest-managed store; a symlink into it can
+        # desync `skill.json` from the on-disk layout.
+        "mode": "copy",
+        "docs": "qwenpaw docs/config.en.md (Directory Structure)",
+    },
+    "claude": {
+        "label": "Claude Code",
+        "paths": ["{cwd}/.claude/skills", "~/.claude/skills"],
+        "mode": "link",
+        "docs": "Claude Code agent skills docs",
+    },
+    "codex": {
+        "label": "Codex CLI",
+        "paths": [
+            "{cwd}/.agents/skills",
+            "{cwd}/.codex/skills",
+            "~/.agents/skills",
+            "~/.codex/skills",
+            "/etc/codex/skills",
+        ],
+        "mode": "link",
+        "docs": "developers.openai.com/codex/skills",
+    },
+    "gemini": {
+        "label": "Gemini CLI",
+        "paths": [
+            "{cwd}/.gemini/skills",
+            "{cwd}/.agents/skills",
+            "~/.gemini/skills",
+            "~/.agents/skills",
+        ],
+        "mode": "link",
+        "docs": "geminicli.com/docs/cli/skills",
+    },
+    "opencode": {
+        "label": "OpenCode",
+        "paths": [
+            "{cwd}/.opencode/skills",
+            "{cwd}/.claude/skills",
+            "{cwd}/.agents/skills",
+            "~/.config/opencode/skills",
+            "~/.claude/skills",
+            "~/.agents/skills",
+        ],
+        "mode": "link",
+        "docs": "opencode.ai/docs/skills",
+    },
+    "qwen-code": {
+        "label": "Qwen Code",
+        "paths": ["{cwd}/.qwen/skills", "~/.qwen/skills"],
+        "mode": "link",
+        "docs": "QwenLM/qwen-code docs/users/features/skills.md",
+    },
+    "codebuddy": {
+        "label": "CodeBuddy (腾讯)",
+        "paths": ["{cwd}/.codebuddy/skills", "~/.codebuddy/skills"],
+        "mode": "link",
+        "docs": "cloud.tencent.com/document/product/1831/137020",
+    },
+    "iflow": {
+        "label": "iFlow CLI (心流)",
+        "paths": ["{cwd}/.iflow/skills", "~/.iflow/skills"],
+        "mode": "link",
+        "docs": "platform.iflow.cn/en/docs/skill",
+    },
+    "qoder": {
+        "label": "Qoder (阿里)",
+        "paths": ["{cwd}/.qoder/skills", "~/.qoder/skills"],
+        "mode": "link",
+        "docs": "docs.qoder.com/extensions/skills",
+    },
+    "trae": {
+        "label": "Trae (字节)",
+        "paths": ["{cwd}/.trae/skills", "~/.trae/skills"],
+        "mode": "link",
+        "docs": "docs.trae.ai/ide/skills",
+    },
+    "copilot": {
+        "label": "GitHub Copilot",
+        "paths": [
+            "{cwd}/.github/skills",
+            "{cwd}/.claude/skills",
+            "{cwd}/.agents/skills",
+            "~/.copilot/skills",
+            "~/.agents/skills",
+        ],
+        "mode": "link",
+        "docs": "docs.github.com/copilot/concepts/agents/about-agent-skills",
+    },
+    "cursor": {
+        "label": "Cursor",
+        "paths": [
+            "{cwd}/.cursor/skills",
+            "{cwd}/.agents/skills",
+            "{cwd}/.claude/skills",
+            "{cwd}/.codex/skills",
+            "~/.cursor/skills",
+            "~/.agents/skills",
+            "~/.claude/skills",
+            "~/.codex/skills",
+        ],
+        "mode": "link",
+        "docs": "cursor.com/docs/skills",
+    },
+}
 
 
 def _home() -> Path:
@@ -108,10 +248,23 @@ def _migrate_v1_to_v2(data: dict[str, Any]) -> list[str]:
     return notes
 
 
+def _migrate_v2_to_v3(data: dict[str, Any]) -> list[str]:
+    """v2 -> v3: add the `agents` override map (agent aliases).
+
+    Built-in aliases live in code (DEFAULT_AGENTS); this map only holds user
+    edits: added aliases, overridden built-ins, and `{"deleted": true}`
+    tombstones. An empty map therefore means "pure defaults", which is what
+    every v2 registry wants.
+    """
+    data.setdefault("agents", {})
+    return ["v2->v3: 新增 agents 别名覆盖表（空 = 全部使用内置默认）"]
+
+
 # Ordered migration steps: (from_version, to_version, fn). Each fn mutates the
 # registry dict in place and returns human-readable notes for stderr.
 MIGRATIONS: list[tuple[int, int, Any]] = [
     (1, 2, _migrate_v1_to_v2),
+    (2, 3, _migrate_v2_to_v3),
 ]
 
 
@@ -154,7 +307,8 @@ def load_registry(*, quiet: bool = False) -> dict[str, Any]:
     """
     p = registry_path()
     if not p.exists():
-        return {"schema_version": SCHEMA_VERSION, "skills": {}, "installs": {}, "bundles": {}}
+        return {"schema_version": SCHEMA_VERSION, "skills": {}, "installs": {},
+                "bundles": {}, "agents": {}}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -166,6 +320,7 @@ def load_registry(*, quiet: bool = False) -> dict[str, Any]:
     data.setdefault("skills", {})
     data.setdefault("installs", {})
     data.setdefault("bundles", {})
+    data.setdefault("agents", {})
     if notes and not quiet:
         print(
             "skill-hub: registry 已自动迁移 "
@@ -315,6 +470,167 @@ def validate_name(name: str) -> None:
         ch.isspace() for ch in name
     ):
         raise InputError(f"非法的 skill 名：{name!r}（不允许路径分隔符或空白）")
+
+
+# ---------- agent aliases: built-in defaults + user overrides ----------
+
+
+def effective_agents(reg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Merge DEFAULT_AGENTS with the registry's user overrides.
+
+    Override entries are either a full/partial agent definition or a
+    `{"deleted": true}` tombstone. A user definition replaces path/mode for
+    that alias but keeps the builtin's label unless overridden.
+    """
+    out: dict[str, dict[str, Any]] = {
+        alias: {**spec, "builtin": True} for alias, spec in DEFAULT_AGENTS.items()
+    }
+    for alias, override in (reg.get("agents") or {}).items():
+        if override.get("deleted"):
+            out.pop(alias, None)
+            continue
+        merged = dict(out.get(alias, {}))
+        merged.update({k: v for k, v in override.items() if v is not None})
+        merged.setdefault("mode", DEFAULT_AGENT_MODE)
+        merged.setdefault("paths", [])
+        merged["builtin"] = alias in DEFAULT_AGENTS
+        out[alias] = merged
+    return out
+
+
+def expand_agent_path(template: str, cwd: Path | None = None) -> tuple[Path | None, str]:
+    """Expand `{cwd}`, `${VAR}`, `${VAR:-default}` and `~` in one candidate path.
+
+    Returns (path, "") on success, or (None, reason) when a referenced env var
+    is unset and has no default — such a candidate is simply skipped.
+    """
+    s = template.replace(CWD_TOKEN, str(cwd or Path.cwd()))
+    missing: list[str] = []
+
+    def _sub(m: re.Match[str]) -> str:
+        var, default = m.group(1), m.group(2)
+        val = os.environ.get(var)
+        if val:
+            return val
+        if default is not None:
+            return default
+        missing.append(var)
+        return ""
+
+    s = ENV_TOKEN_RE.sub(_sub, s)
+    if missing:
+        return None, f"环境变量未设置: {', '.join(sorted(set(missing)))}"
+    p = Path(s).expanduser()
+    if not p.is_absolute():
+        p = (cwd or Path.cwd()) / p
+    return p.resolve(), ""
+
+
+def resolve_agent_dir(
+    alias: str, reg: dict[str, Any], *, create: bool = False
+) -> tuple[Path, dict[str, Any]]:
+    """Resolve an agent alias to the skills directory to install into.
+
+    Candidates are tried in declared order; the first one that already exists
+    wins. `create=True` creates the first resolvable candidate instead of
+    failing when none exists.
+    """
+    agents = effective_agents(reg)
+    if alias not in agents:
+        known = ", ".join(sorted(agents)) or "(none)"
+        raise InputError(f"未知的 agent 别名：{alias!r}（已知：{known}）")
+    spec = agents[alias]
+    candidates: list[Path] = []
+    skipped: list[str] = []
+    for tpl in spec.get("paths", []):
+        path, reason = expand_agent_path(tpl)
+        if path is None:
+            skipped.append(f"{tpl}  ({reason})")
+            continue
+        candidates.append(path)
+        if path.is_dir():
+            return path, spec
+    if create and candidates:
+        first = candidates[0]
+        first.mkdir(parents=True, exist_ok=True)
+        print(f"created agent skills dir: {first}", file=sys.stderr)
+        return first, spec
+    lines = [f"  - {p}  (不存在)" for p in candidates]
+    lines += [f"  - {s}" for s in skipped]
+    detail = "\n".join(lines) or "  (该别名没有配置任何路径)"
+    raise InputError(
+        f"agent '{alias}' 的目标 skills 目录都不存在：\n{detail}\n"
+        f"用 `install <name> --agent {alias} --create` 创建第一个候选目录，"
+        f"或 `agents add {alias} <path> --mode link` 覆盖配置"
+    )
+
+
+def cmd_agents_list() -> int:
+    reg = load_registry(quiet=True)
+    agents = effective_agents(reg)
+    if not agents:
+        print("(no agent aliases)")
+        return EXIT_OK
+    for alias in sorted(agents):
+        spec = agents[alias]
+        origin = "builtin" if spec.get("builtin") else "user"
+        print(f"{alias}\t{spec.get('label', alias)}\t{spec.get('mode', DEFAULT_AGENT_MODE)}\t{origin}")
+        for tpl in spec.get("paths", []):
+            path, reason = expand_agent_path(tpl)
+            if path is None:
+                print(f"  - {tpl}  [skip: {reason}]")
+            else:
+                mark = "OK" if path.is_dir() else "missing"
+                print(f"  - {tpl}  -> {path} [{mark}]")
+    return EXIT_OK
+
+
+def cmd_agents_add(alias: str, paths: list[str], mode: str | None, label: str | None) -> int:
+    if mode is not None and mode not in ("link", "copy"):
+        raise InputError(f"mode 必须是 link 或 copy，得到 {mode!r}")
+    if not paths:
+        raise InputError("至少需要一个路径")
+    reg = load_registry()
+    override: dict[str, Any] = {"paths": list(paths)}
+    if mode:
+        override["mode"] = mode
+    if label:
+        override["label"] = label
+    # Adding over an existing tombstone revives the alias.
+    reg.setdefault("agents", {})[alias] = override
+    save_registry(reg)
+    merged = effective_agents(reg)[alias]
+    print(f"agent '{alias}' saved: mode={merged.get('mode', DEFAULT_AGENT_MODE)} paths={len(merged['paths'])}")
+    return EXIT_OK
+
+
+def cmd_agents_remove(alias: str) -> int:
+    reg = load_registry()
+    if alias not in effective_agents(reg):
+        raise InputError(f"未知的 agent 别名：{alias!r}")
+    reg.setdefault("agents", {})[alias] = {"deleted": True}
+    save_registry(reg)
+    if alias in DEFAULT_AGENTS:
+        print(f"agent '{alias}' disabled (builtin default tombstoned; `agents reset {alias}` restores it)")
+    else:
+        print(f"agent '{alias}' removed")
+    return EXIT_OK
+
+
+def cmd_agents_reset(alias: str | None) -> int:
+    reg = load_registry()
+    overrides = reg.setdefault("agents", {})
+    if alias is None:
+        overrides.clear()
+        save_registry(reg)
+        print(f"all agent overrides cleared; {len(DEFAULT_AGENTS)} builtin aliases active")
+    else:
+        if alias not in overrides:
+            raise InputError(f"agent '{alias}' 没有用户覆盖，无需重置")
+        overrides.pop(alias)
+        save_registry(reg)
+        print(f"agent '{alias}' restored to " + ("builtin default" if alias in DEFAULT_AGENTS else "nonexistence"))
+    return EXIT_OK
 
 
 # ---------- refresh helper used by add and update ----------
@@ -511,16 +827,45 @@ def cmd_update(name: str | None = None) -> int:
     return EXIT_OK
 
 
-def cmd_install(name: str, target: str, mode: str) -> int:
-    if mode not in ("link", "copy"):
+def cmd_install(
+    name: str,
+    target: str | None,
+    mode: str | None,
+    agent: str | None = None,
+    create: bool = False,
+) -> int:
+    """Install a skill into a target dir, or into an agent alias's skills dir.
+
+    Resolution rules:
+      * `--agent <alias>`: candidates in the alias definition are tried in
+        order; the first existing one wins, and the alias's own `mode` applies
+        unless `--link` / `--copy` overrides it.
+      * `--create`: when no candidate exists, create the first resolvable one.
+      * plain `<target>`: used verbatim; mode defaults to link.
+    """
+    if mode is not None and mode not in ("link", "copy"):
         raise InputError(f"mode 必须是 link 或 copy，得到 {mode!r}")
+    if not agent and not target:
+        raise InputError("需要 <target> 路径，或用 --agent <别名>")
     reg = load_registry()
     if name not in reg["skills"]:
         raise InputError(f"未注册的 skill：{name}（先 add）")
+    if agent:
+        base_dir, spec = resolve_agent_dir(agent, reg, create=create)
+        tgt = base_dir / name
+        if mode is None:
+            mode = spec.get("mode", DEFAULT_AGENT_MODE)
+    else:
+        if mode is None:
+            mode = DEFAULT_AGENT_MODE
+        tgt = Path(target).expanduser()
+    if mode not in ("link", "copy"):
+        raise InputError(f"mode 必须是 link 或 copy，得到 {mode!r}")
     src = store_dir() / name
     if not src.exists():
         raise IOErr(f"store 缺失：{src}（重新 add 或修复后重试）")
-    tgt = Path(target).expanduser().resolve() if mode == "link" else Path(target).expanduser()
+    if mode == "link":
+        tgt = tgt.resolve()
     if tgt.is_symlink():
         tgt.unlink()
     elif tgt.is_dir():
@@ -535,9 +880,13 @@ def cmd_install(name: str, target: str, mode: str) -> int:
     reg.setdefault("installs", {}).setdefault(name, [])
     installs = reg["installs"][name]
     installs[:] = [i for i in installs if i["target"] != str(tgt)]
-    installs.append({"target": str(tgt), "mode": mode})
+    entry: dict[str, Any] = {"target": str(tgt), "mode": mode}
+    if agent:
+        entry["agent"] = agent
+    installs.append(entry)
     save_registry(reg)
-    print(f"installed '{name}' → {tgt} ({mode})")
+    via = f" via {agent}" if agent else ""
+    print(f"installed '{name}' → {tgt} ({mode}{via})")
     return EXIT_OK
 
 
@@ -688,10 +1037,16 @@ def main(argv: list[str] | None = None) -> int:
     u = sub.add_parser("update", help="re-check; refresh every install point")
     u.add_argument("name", nargs="?", default=None)
 
-    i = sub.add_parser("install", help="install skill to target (link or copy)")
+    i = sub.add_parser("install", help="install skill to a target dir or an agent alias")
     i.add_argument("name")
-    i.add_argument("target")
+    i.add_argument("target", nargs="?", default=None,
+                   help="目标 skills 目录（省略时用 --agent <别名>）")
+    i.add_argument("--agent", default=None,
+                   help="agent 别名（agents list 查看）；按路径优先级选第一个存在的目录")
+    i.add_argument("--create", action="store_true",
+                   help="别名候选目录都不存在时，创建第一个候选目录")
     i.add_argument("--copy", action="store_true", help="copy instead of symlink")
+    i.add_argument("--link", action="store_true", help="symlink (default; overrides agent mode)")
 
     r = sub.add_parser("uninstall", help="remove an install point (store kept)")
     r.add_argument("name")
@@ -708,6 +1063,21 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("status", help="show installed vs latest, install points")
     s.add_argument("name")
 
+    ag = sub.add_parser("agents", help="list/add/remove agent alias configs")
+    agsub = ag.add_subparsers(dest="agents_cmd", required=True)
+    agsub.add_parser("list", help="show aliases, path priority, resolved status")
+    aga = agsub.add_parser("add", help="add or override an agent alias")
+    aga.add_argument("alias")
+    aga.add_argument("paths", nargs="+",
+                     help="按优先级排列的路径模板（支持 {cwd}、${VAR}、${VAR:-默认}、~）")
+    aga.add_argument("--mode", choices=("link", "copy"), default=None,
+                     help="该别名的默认安装方式（默认 link）")
+    aga.add_argument("--label", default=None, help="人类可读名称")
+    agr = agsub.add_parser("remove", help="delete an alias (builtin: tombstone)")
+    agr.add_argument("alias")
+    agrs = agsub.add_parser("reset", help="drop user overrides (one alias or all)")
+    agrs.add_argument("alias", nargs="?", default=None)
+
     args = p.parse_args(argv)
     ns = vars(args).copy()
     cmd = ns.pop("cmd")
@@ -717,8 +1087,19 @@ def main(argv: list[str] | None = None) -> int:
         if cmd == "update":
             return cmd_update(ns.get("name"))
         if cmd == "install":
-            mode = "copy" if ns.pop("copy", False) else "link"
-            return cmd_install(ns["name"], ns["target"], mode)
+            want_copy = ns.pop("copy", False)
+            want_link = ns.pop("link", False)
+            if want_copy and want_link:
+                raise InputError("--copy 与 --link 不能同时使用")
+            mode = "copy" if want_copy else ("link" if want_link else None)
+            target = ns.get("target")
+            agent = ns.get("agent")
+            # sugar: `install <name> @claude`
+            if target and target.startswith("@"):
+                if agent:
+                    raise InputError("目标已用 @别名，不要再加 --agent")
+                agent, target = target[1:], None
+            return cmd_install(ns["name"], target, mode, agent=agent, create=ns.get("create", False))
         if cmd == "uninstall":
             return cmd_uninstall(ns["name"], ns["target"])
         if cmd == "remove":
@@ -727,6 +1108,16 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_list()
         if cmd == "status":
             return cmd_status(ns["name"])
+        if cmd == "agents":
+            which = ns.get("agents_cmd")
+            if which == "list":
+                return cmd_agents_list()
+            if which == "add":
+                return cmd_agents_add(ns["alias"], ns["paths"], ns.get("mode"), ns.get("label"))
+            if which == "remove":
+                return cmd_agents_remove(ns["alias"])
+            if which == "reset":
+                return cmd_agents_reset(ns.get("alias"))
     except InputError as exc:
         print(f"skill-hub: {exc}", file=sys.stderr)
         return EXIT_INPUT_ERROR
