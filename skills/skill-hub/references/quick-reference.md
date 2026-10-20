@@ -2,7 +2,7 @@
 
 Minimal install/maintain for skills from user-specified tarball URLs.
 
-## Six verbs
+## Seven verbs
 
 | Verb | Purpose | Online? |
 |---|---|---|
@@ -12,6 +12,7 @@ Minimal install/maintain for skills from user-specified tarball URLs.
 | `list` | Show every registered skill + its install points | no |
 | `status <name>` | Show installed version, latest version, all install points | yes (HEAD first, GET only if needed) |
 | `uninstall <name> <target>` | Remove an install point (store stays) | no |
+| `remove <name> [--purge]` | Drop the registry entry (`--purge` also deletes the store) | no |
 
 Exit codes: `0` ok, `1` argument/registry error, `2` I/O (network/extract/link).
 
@@ -75,7 +76,41 @@ python3 $HUB status quarkdown   # shows NEEDS UPDATE / up-to-date
 
 # Remove a copy (store unaffected)
 python3 $HUB uninstall quarkdown ~/.config/qwenpaw/agents/research/skills/quarkdown
+
+# Drop a skill from the registry (all install points must be gone first)
+python3 $HUB uninstall quarkdown /data/myrepo/work-skills/skills/quarkdown
+python3 $HUB uninstall quarkdown ~/.config/qwenpaw/agents/dev/skills/quarkdown
+python3 $HUB remove quarkdown            # registry entry gone, store kept
+python3 $HUB remove quarkdown --purge    # store deleted too
 ```
+
+## `remove` vs `uninstall` — scope table
+
+| Verb | Install points | Store | Registry entry |
+|---|---|---|---|
+| `uninstall` | one target removed | kept | kept |
+| `remove` | untouched (must already be empty) | kept | deleted |
+| `remove --purge` | untouched (must already be empty) | deleted | deleted |
+
+`remove` **fails with exit 1** while any install point exists, printing every target path:
+
+```
+skill-hub: skill 'quarkdown' 还有 install 点未清理：/a/skills/quarkdown, /b/skills/quarkdown。
+先逐个 `uninstall 'quarkdown' <target>` 再 `remove`
+```
+
+Bundle children: removing one child prunes it from `bundles[<parent-url>].skills`; the bundle entry disappears when its last child is removed. Siblings unaffected.
+
+## Registry schema migration
+
+`schema_version` is checked on every load. Older registries are upgraded **in memory**; the file is only rewritten by the next write verb. Read-only verbs (`list`, `status`) load quietly and print no notice.
+
+| Edge case | Behavior |
+|---|---|
+| registry older than tool | auto-migrate `1 → 2` (adds `bundles`, backfills `source_bundle`/`etag`/`last_modified`); notice on stderr at the next write |
+| registry newer than tool | exit 1 — upgrade skill-hub, no downgrade |
+| no migration path | exit 1 — hand-edit `registry.json` |
+| top-level JSON not an object, or non-int `schema_version` | exit 1 (corrupt registry) |
 
 ## Storage locations
 

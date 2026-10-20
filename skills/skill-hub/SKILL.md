@@ -1,6 +1,6 @@
 ---
 name: skill-hub
-description: Install and maintain skills from user-specified URLs (tarballs). Use when the user wants to add a new skill or skill bundle from a URL, update installed skills to the latest version (with HTTP HEAD fast path), install/link/copy a registered skill into a target directory, or list/status the skill registry. Does NOT search, discover, or recommend skills — only maintains a user-curated set.
+description: Install and maintain skills from user-specified URLs (tarballs). Use when the user wants to add a new skill or skill bundle from a URL, update installed skills to the latest version (with HTTP HEAD fast path), install/link/copy a registered skill into a target directory, remove a skill from the registry, or list/status the skill registry. Does NOT search, discover, or recommend skills — only maintains a user-curated set.
 ---
 
 # Skill Hub
@@ -15,6 +15,7 @@ The skill does **not** search or recommend skills. If the user wants a new skill
 - The user wants to refresh an installed skill to the latest version.
 - The user wants to list installed skills or check which ones are out of date.
 - The user wants to remove an installed copy (without deleting the source from the store).
+- The user wants to drop a skill from the registry entirely (optionally deleting its store copy).
 
 Do **not** use it for: searching, browsing, rating, or recommending skills; modifying a skill's source code (edit the store directly, or override at the target with a real file/dir if `link` mode is in use); packaging or publishing skills.
 
@@ -87,9 +88,49 @@ python3 scripts/skill_hub.py status <name>       # installed vs latest, install 
 
 # 5. Remove an install (does not delete the store entry)
 python3 scripts/skill_hub.py uninstall <name> <target-path>
+
+# 6. Drop a skill from the registry (requires all install points uninstalled first)
+python3 scripts/skill_hub.py remove <name>
+python3 scripts/skill_hub.py remove <name> --purge   # also delete the store copy
 ```
 
 Exit codes: `0` success, `1` input/argument/registry error, `2` I/O error (network, extract, link).
+
+## Removing skills (`remove` vs `uninstall`)
+
+Two verbs, two different scopes — do not mix them up:
+
+| Verb | Touches | Store | Registry entry |
+|---|---|---|---|
+| `uninstall <name> <target>` | one install point only | kept | kept (install list shrinks) |
+| `remove <name>` | registry slot | kept | **deleted** |
+| `remove <name> --purge` | registry slot + store | **deleted** | **deleted** |
+
+Safety gate: `remove` **refuses** (exit code 1) while any install point still references the skill, and the error lists every target path. The correct order is:
+
+```bash
+python3 scripts/skill_hub.py uninstall <name> <target-1>
+python3 scripts/skill_hub.py uninstall <name> <target-2>
+python3 scripts/skill_hub.py remove <name> --purge
+```
+
+`remove` never touches install points itself — a `remove` that silently left stale install entries would be unrecoverable once the registry slot is gone.
+
+Bundle-awareness: removing one child prunes that name from its parent bundle's `skills[]`. When the last child is removed, the bundle record is dropped too. Siblings are never affected.
+
+## Registry schema migration
+
+The registry carries `schema_version`. `load_registry()` upgrades older registries **in memory** through an ordered `MIGRATIONS` table and rewrites the file only when the next write verb runs (`add`/`install`/`uninstall`/`update`/`remove`). Read-only verbs load quietly — no migration notice on `list`/`status`.
+
+| From → To | What changes |
+|---|---|
+| `1 → 2` | add `bundles` map; backfill `source_bundle=null`, `etag=null`, `last_modified=null` on every skill (first `update` after migration falls through to the SHA-256 path once) |
+
+Failure modes are explicit, never silent:
+
+- registry `schema_version` **newer** than this build → exit 1, "upgrade skill-hub first" (no downgrade).
+- no migration path for the current version → exit 1, telling the user to hand-edit the registry.
+- top-level JSON is not an object, or `schema_version` is not an int → exit 1 (corrupt registry).
 
 ## Workflow
 
@@ -100,11 +141,13 @@ Exit codes: `0` success, `1` input/argument/registry error, `2` I/O error (netwo
 5. **Run `install`** for each target the user wants. Default is `link` — point multiple targets (different agents, projects) at the same store entry without duplicating files. Use `--copy` when the target cannot host a symlink (e.g. some synced/remote filesystems, sandboxed locations).
 6. **Update**: when the user says "update skills" or "refresh skill X", run `update`. The helper tries HEAD first; if HEAD confirms the remote is unchanged, no download happens. If HEAD is missing or differs, it downloads the tarball and compares SHA-256, then refreshes every install point.
 7. **Uninstall** when a target is no longer needed; the store entry stays so the skill can be re-installed without re-downloading.
-8. **Report** any non-zero exit code back to the user with the helper's stderr.
+8. **Remove** when the skill should disappear from the registry. If it still has install points, the helper refuses and lists them — uninstall those first, then re-run `remove` (add `--purge` to also delete the store copy).
+9. **Report** any non-zero exit code back to the user with the helper's stderr.
 
 ## Safety / boundaries
 
-- The helper **never deletes the store entry** unless the user explicitly removes it (no `remove` verb yet — by design; if needed, add it).
+- The helper **never deletes a store entry implicitly**: `remove` leaves the store untouched unless `--purge` is passed, and `uninstall` never touches the store at all.
+- The helper **never deletes the registry entry** while install points still exist; the gate is hard (exit 1), not a warning.
 - The helper **never overwrites a non-empty target** that is not a symlink or directory of the same skill. It will fail rather than wipe an unrelated directory.
 - **Name collisions** are explicit errors: `add foo <url>` fails with exit code 1 if `foo` is already registered, with the original source URL in the error message. Bundles never auto-namespace — if a bundle contains a child whose `SKILL.md` name already exists in the registry, the whole `add` fails and no skill is registered.
 - `link` mode: removing the symlink does **not** affect the store; re-installing recreates it.
@@ -115,5 +158,5 @@ Exit codes: `0` success, `1` input/argument/registry error, `2` I/O error (netwo
 
 | File | Purpose |
 |---|---|
-| `references/quick-reference.md` | Copy-paste cheat sheet for the six subcommands, with typical one-liners and the registry schema. |
-| `scripts/skill_hub.py` | Pure-stdlib Python helper (~21 KB). Single file, no install, no dependencies. |
+| `references/quick-reference.md` | Copy-paste cheat sheet for the seven subcommands, with typical one-liners and the registry schema. |
+| `scripts/skill_hub.py` | Pure-stdlib Python helper (~28 KB). Single file, no install, no dependencies. |
