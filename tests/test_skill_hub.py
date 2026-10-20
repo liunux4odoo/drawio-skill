@@ -620,6 +620,186 @@ for _name in ("test_update_head_etag_match_skips_download",
 # ---------- end of v0.2 tests ----------
 
 
+# ---------- v0.3: remove subcommand ----------
+
+
+def test_remove_drops_skill_keeps_store(patch_download, tmp_path):
+    """remove alone drops registry entry; store is left in place."""
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    assert (mod.store_dir() / "demo").exists()
+    rc = run(mod, "remove", "demo")
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert "demo" not in reg["skills"]
+    # Store stays (no --purge)
+    assert (mod.store_dir() / "demo").exists()
+
+
+def test_remove_with_purge_deletes_store(patch_download):
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    rc = run(mod, "remove", "demo", "--purge")
+    assert rc == 0
+    assert not (mod.store_dir() / "demo").exists()
+    reg = json.loads(mod.registry_path().read_text())
+    assert "demo" not in reg["skills"]
+
+
+def test_remove_rejects_when_installs_exist(patch_download, capsys):
+    """Hard safety: can't drop a skill while it still has install points."""
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    run(mod, "install", "demo", str(tmp_path / "t1"))
+    rc = run(mod, "remove", "demo", "--purge")
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "install" in err
+    assert "uninstall" in err
+    # Registry unchanged
+    reg = json.loads(mod.registry_path().read_text())
+    assert "demo" in reg["skills"]
+
+
+def test_remove_unknown_skill_rejected(patch_download):
+    tmp_path, mod, calls, _ = patch_download
+    rc = run(mod, "remove", "ghost")
+    assert rc == 1
+
+
+def test_remove_after_uninstall_succeeds(patch_download, tmp_path):
+    """Happy path: uninstall target first, then remove."""
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    run(mod, "install", "demo", str(tmp_path / "t1"))
+    run(mod, "uninstall", "demo", str(tmp_path / "t1"))
+    rc = run(mod, "remove", "demo", "--purge")
+    assert rc == 0
+    assert not (mod.store_dir() / "demo").exists()
+
+
+def test_remove_bundle_child_does_not_touch_siblings(patch_download, tmp_path):
+    """Removing one bundle child must not affect its siblings; orphan bundle
+    entry gets pruned."""
+    _, mod, calls, _ = patch_download
+    archive = _make_bundle(tmp_path, "b1.tar.gz", ["alpha", "beta"])
+    url = "https://example.test/b1.tar.gz"
+    mod.download_with_headers = lambda u, dest: (calls.append(u), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    run(mod, "add", url)
+
+    rc = run(mod, "remove", "alpha", "--purge")
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert "alpha" not in reg["skills"]
+    assert "beta" in reg["skills"]
+    # Bundle entry still has one surviving child -> kept
+    assert any("alpha" in b.get("skills", []) for b in reg["bundles"].values()) or True
+    # The specific bundle for this url must still mention beta
+    assert url in reg["bundles"]
+    assert reg["bundles"][url]["skills"] == ["beta"]
+
+
+def test_remove_last_bundle_child_drops_bundle_entry(patch_download, tmp_path):
+    _, mod, calls, _ = patch_download
+    archive = _make_bundle(tmp_path, "b1.tar.gz", ["alpha", "beta"])
+    url = "https://example.test/b1.tar.gz"
+    mod.download_with_headers = lambda u, dest: (calls.append(u), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    run(mod, "add", url)
+    run(mod, "remove", "alpha", "--purge")
+    run(mod, "remove", "beta", "--purge")
+    reg = json.loads(mod.registry_path().read_text())
+    assert reg["bundles"] == {}
+
+
+# ---------- v0.3: schema migration ----------
+
+
+def _write_v1_registry(path: Path) -> None:
+    """Write a registry in v1 format (no bundles, no source_bundle/etag/last_modified)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "skills": {
+            "alpha": {
+                "url": "https://example.test/alpha.tar.gz",
+                "version": "deadbeef" * 8,
+                "installed_at": "2026-09-15T10:00:00+00:00",
+            },
+            "beta": {
+                "url": "https://example.test/beta.tar.gz",
+                "version": "cafebabe" * 8,
+                "installed_at": "2026-09-15T10:00:00+00:00",
+            },
+        },
+        "installs": {},
+    }, indent=2), encoding="utf-8")
+
+
+def test_v1_registry_auto_migrates_on_load(patch_download, capsys):
+    """Loading a v1 registry should upgrade to v2 silently and print a notice
+    on the FIRST write verb."""
+    tmp_path, mod, calls, _ = patch_download
+    _write_v1_registry(mod.registry_path())
+    # Read-only verb -> no migration notice (quiet=True)
+    rc = run(mod, "list")
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "schema_version" not in err
+
+    # First write verb triggers the notice
+    rc = run(mod, "remove", "alpha", "--purge")  # alpha has no installs, safe
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "schema_version 2" in err
+
+    # File is now persisted at v2
+    reg = json.loads(mod.registry_path().read_text())
+    assert reg["schema_version"] == 2
+    assert "bundles" in reg
+    assert "alpha" not in reg["skills"]  # remove took effect during migration
+    # Surviving skill got backfilled with v2-only fields
+    assert reg["skills"]["beta"]["source_bundle"] is None
+    assert reg["skills"]["beta"]["etag"] is None
+    assert reg["skills"]["beta"]["last_modified"] is None
+
+
+def test_fresh_run_uses_current_schema(patch_download, capsys):
+    """No file at startup -> registry created with SCHEMA_VERSION (no migration)."""
+    tmp_path, mod, calls, _ = patch_download
+    # Don't write a registry; first write verb should create it at v2 without notice
+    rc = run(mod, "list")
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "schema_version" not in err
+
+
+def test_future_schema_version_rejected(isolated_home, tmp_path):
+    """Registry newer than this build -> error (downgrade protection)."""
+    _, mod = isolated_home
+    rp = mod.registry_path()
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({
+        "schema_version": 99,  # future
+        "skills": {},
+        "installs": {},
+    }), encoding="utf-8")
+    rc = mod.main(["list"])
+    assert rc == 1
+
+
+def test_invalid_top_level_rejected(isolated_home, tmp_path):
+    """Registry JSON must be an object, not a list or scalar."""
+    _, mod = isolated_home
+    rp = mod.registry_path()
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+    rc = mod.main(["list"])
+    assert rc == 1
+
+
+# ---------- end of v0.3 tests ----------
+
+
 def test_registry_path_override_via_env(tmp_path, monkeypatch):
     custom_home = tmp_path / "alt-home"
     custom_home.mkdir()

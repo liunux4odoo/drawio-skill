@@ -13,6 +13,9 @@ Subcommands:
     list                        print registry contents
     status <name>               show installed vs latest, install points
     uninstall <name> <target>   remove an install point (store kept)
+    remove <name> [--purge]     drop a skill from the registry; --purge also
+                                deletes the store (install points must already
+                                be uninstalled)
 
 Exit codes:
     0  success
@@ -31,6 +34,12 @@ Update flow (v0.2):
     3. Otherwise GET the tarball, compare SHA-256 to stored version
     4. If SHA-256 unchanged -> skip extract, just update timestamp
     5. If SHA-256 changed -> replace store + re-link/re-copy installs
+
+Schema migration (v0.3):
+    The registry carries a schema_version field. On load, any older version
+    is upgraded in-memory via MIGRATIONS and rewritten to disk the next time
+    a save verb runs. Newer versions than the running tool errors out (the
+    user must upgrade skill-hub).
 """
 from __future__ import annotations
 
@@ -58,7 +67,7 @@ EXIT_IO_ERROR = 2
 CHUNK = 65536
 DEFAULT_TIMEOUT = 60  # seconds
 BUNDLE_DIR_NAME = "skills"
-USER_AGENT = "skill-hub/1.2"
+USER_AGENT = "skill-hub/1.3"
 
 FRONTMATTER_NAME_RE = re.compile(r"^name:\s*([A-Za-z0-9._\-]+)\s*$", re.MULTILINE)
 URL_BASENAME_RE = re.compile(r"^.*?([^/]+?)(?:\.tar\.gz|\.tgz|\.zip)(?:\?.*)?$", re.IGNORECASE)
@@ -81,7 +90,68 @@ def store_dir() -> Path:
     return _store()
 
 
-def load_registry() -> dict[str, Any]:
+def _migrate_v1_to_v2(data: dict[str, Any]) -> list[str]:
+    """v1 -> v2: add `bundles` map; backfill `source_bundle` on every skill.
+
+    v1 registry had no bundles and no source_bundle field. Every v1 skill came
+    from a single-skill URL, so source_bundle is always null. The bundles map
+    starts empty. `etag` / `last_modified` are cache hints; absent means "unknown",
+    which makes update fall through to the SHA-256 path exactly once.
+    """
+    notes: list[str] = []
+    data.setdefault("bundles", {})
+    for info in data.get("skills", {}).values():
+        info.setdefault("source_bundle", None)
+        info.setdefault("etag", None)
+        info.setdefault("last_modified", None)
+    notes.append(f"v1->v2: 新增 bundles 映射；{len(data.get('skills', {}))} 个 skill 标记 source_bundle=null")
+    return notes
+
+
+# Ordered migration steps: (from_version, to_version, fn). Each fn mutates the
+# registry dict in place and returns human-readable notes for stderr.
+MIGRATIONS: list[tuple[int, int, Any]] = [
+    (1, 2, _migrate_v1_to_v2),
+]
+
+
+def _apply_migrations(data: dict[str, Any]) -> list[str]:
+    """Migrate `data` up to SCHEMA_VERSION in place; return note strings.
+
+    Raises InputError when the registry is newer than this build (a downgrade)
+    or when no migration path exists.
+    """
+    current = data.get("schema_version")
+    if not isinstance(current, int):
+        raise InputError(f"registry schema_version={current!r} 不是整数（registry 可能损坏）")
+    if current > SCHEMA_VERSION:
+        raise InputError(
+            f"registry schema_version={current} 高于本工具支持的 {SCHEMA_VERSION}；"
+            f"请升级 skill-hub 后再试（不会自动降级）"
+        )
+    notes: list[str] = []
+    while current < SCHEMA_VERSION:
+        step = next(
+            ((f, t, fn) for f, t, fn in MIGRATIONS if f == current), None
+        )
+        if step is None:
+            raise InputError(
+                f"缺少 schema_version {current} -> {SCHEMA_VERSION} 的迁移路径；"
+                f"请手工编辑 {registry_path()}"
+            )
+        frm, to, fn = step
+        notes.extend(fn(data))
+        current = to
+        data["schema_version"] = to
+    return notes
+
+
+def load_registry(*, quiet: bool = False) -> dict[str, Any]:
+    """Load the registry, auto-migrating older schema versions forward.
+
+    Migration is in-memory here; the file is rewritten only when a verb saves.
+    Pass quiet=True to suppress the migration notice (used by read-only verbs).
+    """
     p = registry_path()
     if not p.exists():
         return {"schema_version": SCHEMA_VERSION, "skills": {}, "installs": {}, "bundles": {}}
@@ -89,14 +159,21 @@ def load_registry() -> dict[str, Any]:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise InputError(f"registry 无法解析 {p}：{exc}") from exc
-    sv = data.get("schema_version")
-    if sv != SCHEMA_VERSION:
-        raise InputError(
-            f"registry schema_version={sv}，期望 {SCHEMA_VERSION}（不支持自动迁移）"
-        )
+    if not isinstance(data, dict):
+        raise InputError(f"registry 顶层不是 JSON 对象（{p}）")
+
+    notes = _apply_migrations(data)
     data.setdefault("skills", {})
     data.setdefault("installs", {})
     data.setdefault("bundles", {})
+    if notes and not quiet:
+        print(
+            "skill-hub: registry 已自动迁移 "
+            f"-> schema_version {data['schema_version']}",
+            file=sys.stderr,
+        )
+        for n in notes:
+            print(f"  - {n}", file=sys.stderr)
     return data
 
 
@@ -482,8 +559,54 @@ def cmd_uninstall(name: str, target: str) -> int:
     return EXIT_OK
 
 
-def cmd_list() -> int:
+def cmd_remove(name: str, purge: bool) -> int:
+    """Drop a skill from the registry (and, with --purge, delete its store).
+
+    Bundle-aware: removing one child does not touch its siblings. If the
+    parent bundle is no longer reachable (no other child references it), the
+    bundle entry is also pruned.
+
+    Install points are NEVER touched by `remove` -- a `remove` followed by an
+    `add` with a new name would leave stale install entries for the old
+    name, so we explicitly fail when any install is registered, listing the
+    targets. Use `uninstall` for each target first, then `remove`.
+    """
     reg = load_registry()
+    if name not in reg["skills"]:
+        raise InputError(f"未注册的 skill：{name}")
+    if reg.get("installs", {}).get(name):
+        targets = ", ".join(i["target"] for i in reg["installs"][name])
+        raise InputError(
+            f"skill '{name}' 还有 install 点未清理：{targets}。"
+            f"先逐个 `uninstall '{name}' <target>` 再 `remove`"
+        )
+
+    info = reg["skills"].pop(name)
+    reg.get("installs", {}).pop(name, None)
+    # If the parent bundle is now orphan (no surviving child), drop it too.
+    bundle_id = info.get("source_bundle")
+    if bundle_id and bundle_id in reg.get("bundles", {}):
+        # Prune this child from the bundle's skills list
+        bundle_skills = reg["bundles"][bundle_id].get("skills", [])
+        reg["bundles"][bundle_id]["skills"] = [s for s in bundle_skills if s != name]
+        if not reg["bundles"][bundle_id]["skills"]:
+            reg["bundles"].pop(bundle_id)
+
+    store = store_dir() / name
+    if purge and store.exists():
+        if store.is_symlink():
+            store.unlink()
+        else:
+            shutil.rmtree(store)
+        print(f"removed store: {store}")
+
+    save_registry(reg)
+    print(f"removed '{name}' from registry (was: {info['url']})")
+    return EXIT_OK
+
+
+def cmd_list() -> int:
+    reg = load_registry(quiet=True)
     if not reg["skills"]:
         print("(no skills registered)")
         return EXIT_OK
@@ -496,7 +619,7 @@ def cmd_list() -> int:
 
 
 def cmd_status(name: str) -> int:
-    reg = load_registry()
+    reg = load_registry(quiet=True)
     if name not in reg["skills"]:
         raise InputError(f"未注册的 skill：{name}")
     info = reg["skills"][name]
@@ -574,6 +697,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("name")
     r.add_argument("target")
 
+    rm = sub.add_parser("remove", help="drop a skill from the registry (use --purge to also delete its store)")
+    rm.add_argument("name")
+    rm.add_argument("--purge", action="store_true",
+                    help="also delete the extracted source under the store dir")
+    rm.add_argument("--yes", action="store_true",
+                    help="(no-op, kept for future safety prompts)")
+
     sub.add_parser("list", help="list every registered skill + install points")
     s = sub.add_parser("status", help="show installed vs latest, install points")
     s.add_argument("name")
@@ -591,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_install(ns["name"], ns["target"], mode)
         if cmd == "uninstall":
             return cmd_uninstall(ns["name"], ns["target"])
+        if cmd == "remove":
+            return cmd_remove(ns["name"], ns["purge"])
         if cmd == "list":
             return cmd_list()
         if cmd == "status":
