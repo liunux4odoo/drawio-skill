@@ -71,36 +71,49 @@ def patch_download(isolated_home, request):
     Default mode: first download per URL returns v1, subsequent returns v2
     (simulates a CI tarball that was updated between calls).
 
-    "stable" mode (via `@pytest.mark.parametrize("patch_download", ["stable"], indirect=True)`):
-    always returns v1 (no version change between calls).
+    Also mocks head_metadata: by default returns no ETag/Last-Modified (forces
+    GET+sha path). Tests that want the HEAD fast path can parametrize
+    `"with_etag"`. Parametrizing `"stable"` keeps downloads at v1.
     """
     tmp_path, mod = isolated_home
     archive_v1 = _make_tarball(tmp_path / "archives", "sample-skill-v1.tar.gz", "v1")
     archive_v2 = _make_tarball(tmp_path / "archives", "sample-skill-v2.tar.gz", "v2")
     archive_zip = _make_zip(tmp_path / "archives", "sample-skill-v1.zip", "v1-zip")
 
-    stable = getattr(request, "param", None) == "stable"
+    param = getattr(request, "param", None)
+    stable = param == "stable"
+    with_etag = param == "with_etag"
 
     calls: list[str] = []
     seen: set[str] = set()
 
-    def fake_download(url: str, dest: Path) -> None:
+    def fake_download(url: str, dest: Path) -> dict[str, str]:
         calls.append(url)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if url.endswith(".zip"):
             shutil.copy2(archive_zip, dest)
-            return
+            return {}
         if stable:
             shutil.copy2(archive_v1, dest)
-            return
+            return {}
         first_time = url not in seen
         seen.add(url)
         if first_time:
             shutil.copy2(archive_v1, dest)
         else:
             shutil.copy2(archive_v2, dest)
+        return {}  # no ETag/Last-Modified from fake server
 
-    mod.download = fake_download  # type: ignore[assignment]
+    def fake_head(url: str) -> dict[str, str]:
+        # with_etag mode: return a stable ETag for any tar.gz URL. The HEAD
+        # fast path checks against the registry's stored etag; the tests that
+        # want a cache hit write the matching etag into the registry first.
+        if with_etag and url.endswith(".tar.gz"):
+            return {"etag": 'W/"stable-v1-etag"', "last-modified": "Mon, 01 Jan 2026 00:00:00 GMT"}
+        return {}
+
+    mod.download_with_headers = fake_download  # type: ignore[assignment]
+    mod.head_metadata = fake_head  # type: ignore[assignment]
     return tmp_path, mod, calls, {
         "v1": "https://example.test/sample-skill-v1.tar.gz",
         "v2": "https://example.test/sample-skill-v2.tar.gz",
@@ -324,6 +337,287 @@ def test_zip_archive_supported(patch_download):
     rc = run(mod, "add", "ziptool", urls["zip"])
     assert rc == 0
     assert (mod.store_dir() / "ziptool" / "SKILL.md").read_text(encoding="utf-8") == "v1-zip"
+
+
+# ---------- 4.1: bundle mode (skills/<child>/SKILL.md) ----------
+
+
+def _make_bundle(tmp_path: Path, name: str, child_names: list[str], marker: str = "v1") -> Path:
+    """Build a tarball whose top-level layout is skills/<child>/SKILL.md."""
+    src_root = tmp_path / "bundle-src" / name.replace(".tar.gz", "")
+    src_root.mkdir(parents=True, exist_ok=True)
+    archive = tmp_path / "archives" / name
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    for child in child_names:
+        child_dir = src_root / "skills" / child
+        child_dir.mkdir(parents=True, exist_ok=True)
+        (child_dir / "SKILL.md").write_text(
+            f"---\nname: {child}\ndescription: {child} skill\n---\n\n# {child} body ({marker})\n",
+            encoding="utf-8",
+        )
+    with tarfile.open(archive, "w:gz") as t:
+        t.add(src_root, arcname=".")
+    return archive
+
+
+def test_add_bundle_registers_all_children(patch_download, tmp_path):
+    """4.1: URL whose extracted layout is skills/<child>/SKILL.md -> register all."""
+    _, mod, calls, _ = patch_download
+    archive = _make_bundle(tmp_path, "bundle-v1.tar.gz", ["alpha", "beta"])
+    bundle_url = "https://example.test/bundle-v1.tar.gz"
+
+    # monkey-patch download to serve our bundle
+    def serve(url: str, dest: Path) -> dict[str, str]:
+        calls.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(archive, dest)
+        return {}
+    mod.download_with_headers = serve  # type: ignore[assignment]
+
+    rc = run(mod, "add", bundle_url)
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert set(reg["skills"].keys()) == {"alpha", "beta"}
+    assert reg["skills"]["alpha"]["source_bundle"] == bundle_url
+    assert reg["skills"]["beta"]["source_bundle"] == bundle_url
+    assert "alpha body" in (mod.store_dir() / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+    assert "beta body" in (mod.store_dir() / "beta" / "SKILL.md").read_text(encoding="utf-8")
+    # bundles map is populated
+    assert bundle_url in reg["bundles"]
+    assert sorted(reg["bundles"][bundle_url]["skills"]) == ["alpha", "beta"]
+
+
+def test_add_bundle_rejects_explicit_name(patch_download, tmp_path, capsys):
+    """Bundle + name is a user error: tell them to omit the name."""
+    _, mod, calls, _ = patch_download
+    archive = _make_bundle(tmp_path, "bundle-v1.tar.gz", ["alpha"])
+    mod.download_with_headers = lambda url, dest: (calls.append(url), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    rc = run(mod, "add", "name-ignored", "https://example.test/bundle-v1.tar.gz")
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "bundle" in err
+    # No registry was written (the command errored before save_registry)
+    assert not mod.registry_path().exists()
+
+
+def test_add_bundle_collides_with_existing_rejected(patch_download, tmp_path):
+    """4.1+4.3: bundle mode hits an already-registered name -> error, no overwrite."""
+    _, mod, calls, urls = patch_download
+    # First add a single-skill with name "alpha"
+    run(mod, "add", "alpha", urls["v1"])
+    # Now try a bundle that also contains "alpha"
+    archive = _make_bundle(tmp_path, "bundle-v1.tar.gz", ["alpha", "gamma"])
+    mod.download_with_headers = lambda url, dest: (calls.append(url), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    rc = run(mod, "add", "https://example.test/bundle-v1.tar.gz")
+    assert rc == 1
+    # Original "alpha" is intact, "gamma" is not registered
+    reg = json.loads(mod.registry_path().read_text())
+    assert reg["skills"]["alpha"]["url"] == urls["v1"]  # not overwritten
+    assert "gamma" not in reg["skills"]
+
+
+# ---------- 4.2: name inference ----------
+
+
+def _make_single_skill_tarball(tmp_path: Path, archive_name: str, fm_name: str, body: str = "hi") -> Path:
+    """Build a tarball containing one top-level dir with SKILL.md (frontmatter name: X)."""
+    src = tmp_path / "src" / archive_name.replace(".tar.gz", "")
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "SKILL.md").write_text(
+        f"---\nname: {fm_name}\ndescription: x\n---\n\n# {fm_name} body\n{body}\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "archives" / archive_name
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "w:gz") as t:
+        t.add(src, arcname=src.name)
+    return archive
+
+
+def test_add_infers_name_from_skill_md_frontmatter(patch_download, tmp_path):
+    """4.2: no name passed -> read SKILL.md frontmatter."""
+    _, mod, calls, _ = patch_download
+    archive = _make_single_skill_tarball(tmp_path, "quirky-archive-name.tar.gz", "right-name")
+    url = "https://example.test/quirky-archive-name.tar.gz"
+    mod.download_with_headers = lambda u, dest: (calls.append(u), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    rc = run(mod, "add", url)
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert "right-name" in reg["skills"]
+    # And no "quirky-archive-name" was registered
+    assert "quirky-archive-name" not in reg["skills"]
+
+
+def test_add_infers_name_from_url_when_no_frontmatter(patch_download, tmp_path):
+    """4.2 fallback: no frontmatter -> strip URL basename + strip -skill suffix."""
+    _, mod, calls, _ = patch_download
+    # Build a tarball with SKILL.md but no frontmatter name
+    src = tmp_path / "src" / "v1"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "SKILL.md").write_text("# Just a body, no frontmatter\n", encoding="utf-8")
+    archive = tmp_path / "archives" / "demo-skill.tar.gz"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "w:gz") as t:
+        t.add(src, arcname="v1")
+    url = "https://example.test/demo-skill.tar.gz"
+    mod.download_with_headers = lambda u, dest: (calls.append(u), shutil.copy2(archive, dest), {})[-1]  # type: ignore[assignment]
+    rc = run(mod, "add", url)
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert "demo" in reg["skills"]  # -skill suffix stripped
+
+
+def test_add_explicit_name_overrides_inference(patch_download, tmp_path):
+    """4.2: if name is given, use it (don't read frontmatter)."""
+    _, mod, calls, urls = patch_download
+    rc = run(mod, "add", "my-chosen", urls["v1"])
+    assert rc == 0
+    reg = json.loads(mod.registry_path().read_text())
+    assert "my-chosen" in reg["skills"]
+    assert "demo" not in reg["skills"]  # frontmatter would have said "demo"
+
+
+# ---------- 4.3: duplicate name rejected (already in v0.1; tightened error) ----------
+
+
+def test_add_duplicate_includes_source_url_in_error(patch_download, capsys):
+    _, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    rc = run(mod, "add", "demo", "https://example.test/other.tar.gz")
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "demo" in err
+    assert urls["v1"] in err  # error points at the original source
+
+
+# ---------- 4.4: HTTP HEAD fast path ----------
+
+
+def test_update_head_etag_match_skips_download(patch_download, capsys):
+    """4.4: HEAD returns an ETag the registry already knows -> skip GET entirely.
+
+    Uses the "with_etag" fixture variant so fake_head returns a stable ETag.
+    We pre-seed the registry with the matching ETag to simulate that a
+    previous update stored the cache key.
+    """
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    reg = json.loads(mod.registry_path().read_text())
+    reg["skills"]["demo"]["etag"] = 'W/"stable-v1-etag"'
+    mod.registry_path().write_text(json.dumps(reg))
+
+    calls.clear()
+    rc = run(mod, "update", "demo")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "up-to-date" in out
+    assert calls == []  # no GET happened -- HEAD said "unchanged"
+
+
+def test_update_head_no_etag_falls_through_to_sha(patch_download):
+    """4.4: HEAD returns no ETag -> still GET + compare SHA-256 (fallback)."""
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    calls.clear()
+    rc = run(mod, "update", "demo")
+    assert rc == 0
+    # HEAD had no metadata, so we fell through to GET. fake_download flips
+    # to v2 on second call -> SHA differs -> refreshed
+    assert calls == [urls["v1"]]
+
+
+def test_status_head_etag_match_skips_download(patch_download, capsys):
+    """4.4: status also benefits from HEAD fast path."""
+    tmp_path, mod, calls, urls = patch_download
+    run(mod, "add", "demo", urls["v1"])
+    reg = json.loads(mod.registry_path().read_text())
+    reg["skills"]["demo"]["etag"] = 'W/"stable-v1-etag"'
+    mod.registry_path().write_text(json.dumps(reg))
+
+    calls.clear()
+    rc = run(mod, "status", "demo")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "up-to-date" in out
+    assert calls == []  # no GET
+
+
+def test_update_bundle_refreshes_member_only(patch_download, tmp_path):
+    """4.1 regression: bundle update must replace each member with ITS OWN subdir,
+    not the whole extracted tarball (which would nest skills/ inside each store dir)."""
+    _, mod, calls, _ = patch_download
+    archive_v1 = _make_bundle(tmp_path, "b1.tar.gz", ["alpha", "beta"], marker="v1")
+    archive_v2 = _make_bundle(tmp_path, "b2.tar.gz", ["alpha", "beta"], marker="v2")
+    url = "https://example.test/b1.tar.gz"
+    served = {"cur": archive_v1}
+
+    def serve(u: str, dest: Path) -> dict[str, str]:
+        calls.append(u)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(served["cur"], dest)
+        return {}
+
+    mod.download_with_headers = serve  # type: ignore[assignment]
+
+    assert run(mod, "add", url) == 0
+    assert (mod.store_dir() / "alpha" / "SKILL.md").is_file()
+    # No nesting bug at add time
+    assert not (mod.store_dir() / "alpha" / "skills").exists()
+
+    # Swap in v2 (different sha256) and update
+    served["cur"] = archive_v2
+    assert run(mod, "update") == 0
+
+    # Each member store dir holds ONLY its own SKILL.md
+    assert (mod.store_dir() / "alpha" / "SKILL.md").read_text(encoding="utf-8").count("name: alpha") == 1
+    assert (mod.store_dir() / "beta" / "SKILL.md").read_text(encoding="utf-8").count("name: beta") == 1
+    assert not (mod.store_dir() / "alpha" / "skills").exists()
+    assert not (mod.store_dir() / "beta" / "skills").exists()
+    # v2 marker present
+    assert "alpha body (v2)" in (mod.store_dir() / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_update_bundle_install_points_refreshed(patch_download, tmp_path):
+    """Bundle update must also re-link/re-copy the member's install points."""
+    _, mod, calls, _ = patch_download
+    archive_v1 = _make_bundle(tmp_path, "b1.tar.gz", ["alpha"], marker="v1")
+    archive_v2 = _make_bundle(tmp_path, "b2.tar.gz", ["alpha"], marker="v2")
+    url = "https://example.test/b1.tar.gz"
+    served = {"cur": archive_v1}
+
+    def serve(u: str, dest: Path) -> dict[str, str]:
+        calls.append(u)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(served["cur"], dest)
+        return {}
+
+    mod.download_with_headers = serve  # type: ignore[assignment]
+
+    run(mod, "add", url)
+    link_target = tmp_path / "t-link" / "alpha"
+    copy_target = tmp_path / "t-copy" / "alpha"
+    run(mod, "install", "alpha", str(link_target))
+    run(mod, "install", "alpha", str(copy_target), "--copy")
+
+    served["cur"] = archive_v2
+    run(mod, "update", "alpha")
+
+    assert link_target.is_symlink()
+    assert "alpha body (v2)" in (link_target / "SKILL.md").read_text(encoding="utf-8")
+    assert not copy_target.is_symlink()
+    assert "alpha body (v2)" in (copy_target / "SKILL.md").read_text(encoding="utf-8")
+
+
+# Parametrize the two "etag match" tests to use the with_etag fixture variant.
+for _name in ("test_update_head_etag_match_skips_download",
+              "test_status_head_etag_match_skips_download"):
+    _fn = locals()[_name]
+    globals()[_name] = pytest.mark.parametrize(
+        "patch_download", ["with_etag"], indirect=True
+    )(_fn)
+
+
+# ---------- end of v0.2 tests ----------
 
 
 def test_registry_path_override_via_env(tmp_path, monkeypatch):

@@ -6,24 +6,59 @@ Minimal install/maintain for skills from user-specified tarball URLs.
 
 | Verb | Purpose | Online? |
 |---|---|---|
-| `add <name> <url>` | Download + extract + register | yes |
+| `add [<name>] <url>` | Download + extract + register (1 skill, or N if URL is a bundle) | yes |
 | `install <name> <target>` | Symlink target to store (use `--copy` to duplicate) | no |
-| `update [name]` | Re-download, refresh store, re-link/copy all installs | yes |
+| `update [name]` | HEAD check; on mismatch, GET + SHA-256 compare; refresh all installs | yes (HEAD first, GET only if needed) |
 | `list` | Show every registered skill + its install points | no |
-| `status <name>` | Show installed version, latest version, all install points | yes (fetches once) |
+| `status <name>` | Show installed version, latest version, all install points | yes (HEAD first, GET only if needed) |
 | `uninstall <name> <target>` | Remove an install point (store stays) | no |
 
 Exit codes: `0` ok, `1` argument/registry error, `2` I/O (network/extract/link).
 
+## URL forms
+
+`add` auto-detects between two URL shapes:
+
+- **Single skill**: `.../my-skill.tar.gz` → 1 entry in the registry
+- **Bundle**: `.../skills-bundle.tar.gz` whose top-level layout is `skills/<child>/SKILL.md` → N entries (one per child), all sharing the same parent URL
+
+To register a bundle, pass the URL **without** an explicit `<name>`:
+
+```bash
+python3 $HUB add https://example.com/bundle.tar.gz   # bundle: N skills
+python3 $HUB add my-skill https://example.com/skill.tar.gz   # single
+```
+
+## Name inference (when `<name>` is omitted)
+
+1. Read `SKILL.md` frontmatter's `name:` field (most accurate)
+2. Fallback: URL basename with archive extension + `-skill`/`_skill` suffix stripped
+3. Error: neither yields a name → exit code 1
+
+## Update flow (v0.2)
+
+```
+HEAD <url>
+  ├─ ETag / Last-Modified matches stored value → up-to-date (no download)
+  └─ mismatch or no metadata → GET + SHA-256 compare
+                                  ├─ SHA-256 matches → up-to-date (just stamp installed_at)
+                                  └─ differs → replace store + re-link/re-copy
+```
+
 ## Typical one-liners
 
 ```bash
-# Fresh install
 HUB=~/.local/share/work-skills/skills/skill-hub/scripts/skill_hub.py
 
+# Fresh single-skill install
 python3 $HUB add quarkdown https://example.com/skills/quarkdown-1.2.0.tar.gz
 python3 $HUB install quarkdown /data/myrepo/work-skills/skills/quarkdown
 python3 $HUB install quarkdown ~/.config/qwenpaw/agents/dev/skills/quarkdown --copy
+
+# Bundle install (e.g. 5-skill pack)
+python3 $HUB add https://example.com/wps-bundle.tar.gz
+python3 $HUB list                       # see the 5 skills that were registered
+python3 $HUB install wps-office ~/.config/qwenpaw/agents/dev/skills/wps-office
 
 # Mirror the same skill into a second agent
 python3 $HUB install quarkdown ~/.config/qwenpaw/agents/research/skills/quarkdown
@@ -46,10 +81,10 @@ python3 $HUB uninstall quarkdown ~/.config/qwenpaw/agents/research/skills/quarkd
 
 | Path | Role |
 |---|---|
-| `~/.config/skill-hub/registry.json` | URLs, versions (sha256), install targets |
+| `~/.config/skill-hub/registry.json` | URLs, versions (sha256), ETag/Last-Modified hints, install targets, bundle map |
 | `~/.local/share/skill-hub/skills/<name>/` | Extracted source per skill |
 
-Override `XDG_CONFIG_HOME` / `XDG_DATA_HOME` to relocate.
+Override `SKILL_HUB_HOME` / `SKILL_HUB_DATA` to relocate.
 
 ## link vs copy — when to use which
 
@@ -70,12 +105,15 @@ readlink <target>                                                        # link 
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "skills": {
     "<name>": {
       "url": "https://...",
       "version": "<sha256 of downloaded tarball>",
-      "installed_at": "2026-10-20T10:00:00+00:00"
+      "installed_at": "2026-10-20T10:00:00+00:00",
+      "source_bundle": "<parent-url>" | null,
+      "etag": "<from HEAD response>" | null,
+      "last_modified": "<from HEAD response>" | null
     }
   },
   "installs": {
@@ -83,8 +121,16 @@ readlink <target>                                                        # link 
       {"target": "/abs/path/...", "mode": "link"},
       {"target": "/abs/path/...", "mode": "copy"}
     ]
+  },
+  "bundles": {
+    "<parent-url>": {
+      "url": "https://...",
+      "version": "<sha256>",
+      "skills": ["alpha", "beta", "..."],
+      "installed_at": "2026-10-20T10:00:00+00:00"
+    }
   }
 }
 ```
 
-The file is human-editable; preserve JSON formatting and the `schema_version` field. Re-running any verb will rewrite it.
+The file is human-editable; preserve JSON formatting and the `schema_version` field. Re-running any verb will rewrite it. `etag` and `last_modified` are optional (omitted when the server doesn't send them); `source_bundle` is non-null only for skills registered via a bundle URL.

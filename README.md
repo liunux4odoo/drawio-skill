@@ -120,19 +120,31 @@ URLs the user supplies. The user provides a tarball URL; the helper downloads
 it once to `~/.local/share/skill-hub/skills/<name>/` and registers it in
 `~/.config/skill-hub/registry.json`. The agent then links (or copies) that
 store entry into one or more target directories — typically the `skills/`
-folders of various agents or projects. The skill does **not** search, browse,
-or recommend skills — only install/maintain what the user has pointed at.
+folders of various agents or projects.
+
+- **Bundle mode**: if the URL's tarball extracts to a `skills/<child>/SKILL.md`
+  layout, the helper registers every child in one call (typical for repos that
+  ship several skills together).
+- **Name inference**: `add <url>` (no name) reads `SKILL.md` frontmatter or
+  falls back to the URL basename; the explicit name always wins.
+- **Update v0.2**: tries `HTTP HEAD` first (ETag/Last-Modified) and skips the
+  full download when the server says "not modified"; falls back to SHA-256
+  comparison when HEAD can't decide.
+- **Name collisions** are explicit errors — no auto-namespacing.
+
+The skill does **not** search, browse, or recommend skills — only
+install/maintain what the user has pointed at.
 
 ```bash
 HUB=~/.local/share/work-skills/skills/skill-hub/scripts/skill_hub.py
 
-python3 $HUB add   <name> <tarball-url>          # download + register
-python3 $HUB install <name> <target>             # symlink (default)
-python3 $HUB install <name> <target> --copy      # duplicate
-python3 $HUB update [name]                       # re-fetch; refresh all installs
+python3 $HUB add   [<name>] <tarball-url>    # download + register (1 or N skills)
+python3 $HUB install <name> <target>         # symlink (default)
+python3 $HUB install <name> <target> --copy  # duplicate
+python3 $HUB update [name]                   # HEAD check; refresh all installs
 python3 $HUB list
-python3 $HUB status <name>                       # installed vs latest
-python3 $HUB uninstall <name> <target>           # remove install (store kept)
+python3 $HUB status <name>                   # installed vs latest
+python3 $HUB uninstall <name> <target>       # remove install (store kept)
 ```
 
 ### QwenPaw (`skills/qwenpaw/`)
