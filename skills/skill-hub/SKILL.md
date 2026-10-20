@@ -109,7 +109,10 @@ Exit codes: `0` success, `1` input/argument/registry error, `2` I/O error (netwo
 
 ## Agent aliases (install target shorthand)
 
-Instead of spelling out a target path, `install` accepts an agent alias: `--agent <alias>` or the `@<alias>` sugar. Each alias carries an **ordered** list of candidate skills directories; the **first candidate that already exists wins**. That is what makes one alias work for both "current project" and "user-global" without asking which one you meant.
+Instead of spelling out a target path, `install` accepts an agent alias: `--agent <alias>` or the `@<alias>` sugar. Each alias carries an **ordered** list of candidate skills directories. Resolution order:
+
+1. **Env-pinned candidates** — a candidate reading a `${VAR}` that is actually set (e.g. `CLAUDE_CONFIG_DIR`) wins outright, existing or not; see "Env-configurable roots" below.
+2. Otherwise the **first candidate that already exists** wins — which is what makes one alias work for both "current project" and "user-global" without asking which one you meant.
 
 ```bash
 python3 scripts/skill_hub.py install docx --agent claude   # first existing candidate
@@ -124,14 +127,14 @@ Built-in aliases (verified against vendor docs on 2026-10-20; paths in priority 
 | Alias | Agent | Candidate paths (first existing wins) | Mode |
 |---|---|---|---|
 | `qwenpaw` | QwenPaw | `${QWENPAW_WORKING_DIR}/skill_pool`, `~/.qwenpaw/skill_pool`, then workspace-local `…/workspaces/${QWENPAW_AGENT_ID}/skills` | **copy** |
-| `claude` | Claude Code | `{cwd}/.claude/skills`, `~/.claude/skills` | link |
-| `codex` | Codex CLI | `{cwd}/.agents/skills`, `{cwd}/.codex/skills`, `~/.agents/skills`, `~/.codex/skills`, `/etc/codex/skills` | link |
-| `gemini` | Gemini CLI | `{cwd}/.gemini/skills`, `{cwd}/.agents/skills`, `~/.gemini/skills`, `~/.agents/skills` | link |
+| `claude` | Claude Code | `{cwd}/.claude/skills`, `${CLAUDE_CONFIG_DIR}/skills`, `~/.claude/skills` | link |
+| `codex` | Codex CLI | `{cwd}/.agents/skills`, `{cwd}/.codex/skills`, `${CODEX_HOME}/skills`, `~/.agents/skills`, `~/.codex/skills`, `/etc/codex/skills` | link |
+| `gemini` | Gemini CLI | `{cwd}/.gemini/skills`, `{cwd}/.agents/skills`, `${GEMINI_CLI_HOME}/.gemini/skills`, `~/.gemini/skills`, `~/.agents/skills` | link |
 | `opencode` | OpenCode | `{cwd}/.opencode/skills`, `{cwd}/.claude/skills`, `{cwd}/.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` | link |
 | `cursor` | Cursor | `{cwd}/.cursor/skills`, `{cwd}/.agents/skills`, `{cwd}/.claude/skills`, `{cwd}/.codex/skills`, `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills` | link |
-| `copilot` | GitHub Copilot | `{cwd}/.github/skills`, `{cwd}/.claude/skills`, `{cwd}/.agents/skills`, `~/.copilot/skills`, `~/.agents/skills` | link |
-| `qwen-code` | Qwen Code (阿里) | `{cwd}/.qwen/skills`, `~/.qwen/skills` | link |
-| `codebuddy` | CodeBuddy (腾讯) | `{cwd}/.codebuddy/skills`, `~/.codebuddy/skills` | link |
+| `copilot` | GitHub Copilot | `{cwd}/.github/skills`, `{cwd}/.claude/skills`, `{cwd}/.agents/skills`, `${COPILOT_HOME}/skills`, `~/.copilot/skills`, `~/.agents/skills` | link |
+| `qwen-code` | Qwen Code (阿里) | `{cwd}/.qwen/skills`, `${QWEN_HOME}/skills`, `~/.qwen/skills` | link |
+| `codebuddy` | CodeBuddy (腾讯) | `{cwd}/.codebuddy/skills`, `${CODEBUDDY_CONFIG_DIR}/skills`, `~/.codebuddy/skills` | link |
 | `iflow` | iFlow CLI (心流) | `{cwd}/.iflow/skills`, `~/.iflow/skills` | link |
 | `qoder` | Qoder (阿里) | `{cwd}/.qoder/skills`, `~/.qoder/skills` | link |
 | `trae` | Trae (字节) | `{cwd}/.trae/skills`, `~/.trae/skills` | link |
@@ -139,6 +142,28 @@ Built-in aliases (verified against vendor docs on 2026-10-20; paths in priority 
 Sources for the paths (re-check here before changing a row): QwenPaw `docs/config.en.md#directory-structure`; Claude Code skills docs; `developers.openai.com/codex/skills`; `geminicli.com/docs/cli/skills`; `opencode.ai/docs/skills`; `QwenLM/qwen-code docs/users/features/skills.md`; `docs.github.com/copilot/concepts/agents/about-agent-skills`; `cursor.com/docs/skills`; `cloud.tencent.com/document/product/1831/137020`; `platform.iflow.cn/en/docs/skill`; `docs.qoder.com/extensions/skills`; `docs.trae.ai/ide/skills`.
 
 Agents that have **no** Agent Skills directory (rules-file-only tools such as Windsurf/Cline-style `.rules` setups) are deliberately absent — there is nothing to point at. Add your own alias only when the vendor documents a skills directory.
+
+### Env-configurable roots (why some rows have `${VAR}`)
+
+Several agents let you relocate their whole config root, which moves skills with it. Those candidates are **env-pinned**: if the variable is set, the user has explicitly said where that agent reads from, so the resolver never silently falls back to `~/.claude/skills` — it either uses the env root or fails with an explanation. `agents list` marks these rows `[env-pinned]`.
+
+| Env var | Agent | Skills dir becomes |
+|---|---|---|
+| `CLAUDE_CONFIG_DIR` | Claude Code | `$CLAUDE_CONFIG_DIR/skills` |
+| `CODEX_HOME` | Codex CLI | `$CODEX_HOME/skills` (default root `~/.codex`) |
+| `GEMINI_CLI_HOME` | Gemini CLI | `$GEMINI_CLI_HOME/.gemini/skills` (var is the *root*; Gemini creates `.gemini/` in it) |
+| `QWEN_HOME` | Qwen Code | `$QWEN_HOME/skills` (default `~/.qwen`; docs list skills among the state it holds) |
+| `CODEBUDDY_CONFIG_DIR` | CodeBuddy | `$CODEBUDDY_CONFIG_DIR/skills` (default `~/.codebuddy`) |
+| `COPILOT_HOME` | GitHub Copilot CLI | `$COPILOT_HOME/skills` (default `~/.copilot`) |
+| `QWENPAW_WORKING_DIR` | QwenPaw | `$QWENPAW_WORKING_DIR/skill_pool` (default `~/.qwenpaw`) |
+
+Deliberately **not** treated as install roots:
+
+- `OPENCODE_CONFIG_DIR` — OpenCode documents it as searched for agents, commands, modes and plugins "just like `.opencode`", but does not state that `skills/` inside it is discovered. Installing there could land in a directory the CLI never scans, so the alias keeps only `~/.config/opencode/skills`.
+- `COPILOT_SKILLS_DIRS` — comma-separated list of **extra search paths**, not the personal skills dir. It adds discovery locations; it is not where personal skills live.
+- Any GUI-only agent (Cursor, Qoder, Trae) — no documented env override.
+
+Because env-pinning is "explicit config wins", the failure mode is loud rather than silent: install against a pinned root whose `skills/` does not exist returns exit 1 and tells you to add `--create`.
 
 QwenPaw is the only built-in that defaults to **copy**: its pool is manifest-managed (`skill.json`), and a symlink into the pool can desync manifest from layout. Everyone else defaults to **link**, and `--link` / `--copy` always override the alias's own mode.
 

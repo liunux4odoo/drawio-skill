@@ -49,11 +49,14 @@ Schema migration (v0.3, extended in v0.4):
     user must upgrade skill-hub). v1->v2 added bundles; v2->v3 added the
     agent alias override map.
 
-Agent aliases (v0.4):
+Agent aliases (v0.4, env roots in v0.5):
     DEFAULT_AGENTS below is the authoritative reference table of common
     agents' skills directories (verified against vendor docs, sources in
     each entry's `docs` field). Candidate paths are ordered; install picks
     the first that exists. Paths support {cwd}, ${VAR}, ${VAR:-default}, ~.
+    A candidate whose ${VAR} is actually set is "env-pinned": the user
+    declared that agent's config root, so it wins even if the skills dir
+    does not exist yet (no silent fallback to the default path).
     Overrides (add/remove/reset) live in registry["agents"], never in code.
 """
 from __future__ import annotations
@@ -92,7 +95,9 @@ SUFFIX_SKILL_RE = re.compile(r"[-_]?skills?$", re.IGNORECASE)
 ENV_TOKEN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 # Built-in agent aliases: path candidates are tried in order, first one that
-# already exists wins. `{cwd}` = current working directory (project scope).
+# already exists wins -- unless a candidate is env-pinned (its ${VAR} is set),
+# in which case that root is authoritative and we never fall back to defaults.
+# `{cwd}` = current working directory (project scope).
 # Every path below was verified against the vendor's own docs on 2026-10-20;
 # the docs URL is kept next to each entry so a future reader can re-check.
 # Users override / extend / delete these via the `agents` subcommands; their
@@ -114,32 +119,34 @@ DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
     },
     "claude": {
         "label": "Claude Code",
-        "paths": ["{cwd}/.claude/skills", "~/.claude/skills"],
+        "paths": ["{cwd}/.claude/skills", "${CLAUDE_CONFIG_DIR}/skills", "~/.claude/skills"],
         "mode": "link",
-        "docs": "Claude Code agent skills docs",
+        "docs": "code.claude.com/docs/en/env-vars (CLAUDE_CONFIG_DIR)",
     },
     "codex": {
         "label": "Codex CLI",
         "paths": [
             "{cwd}/.agents/skills",
             "{cwd}/.codex/skills",
+            "${CODEX_HOME}/skills",
             "~/.agents/skills",
             "~/.codex/skills",
             "/etc/codex/skills",
         ],
         "mode": "link",
-        "docs": "developers.openai.com/codex/skills",
+        "docs": "developers.openai.com/codex/skills; CODEX_HOME relocates ~/.codex",
     },
     "gemini": {
         "label": "Gemini CLI",
         "paths": [
             "{cwd}/.gemini/skills",
             "{cwd}/.agents/skills",
+            "${GEMINI_CLI_HOME}/.gemini/skills",
             "~/.gemini/skills",
             "~/.agents/skills",
         ],
         "mode": "link",
-        "docs": "geminicli.com/docs/cli/skills",
+        "docs": "geminicli.com/docs/cli/skills; GEMINI_CLI_HOME is the root containing .gemini/",
     },
     "opencode": {
         "label": "OpenCode",
@@ -156,15 +163,19 @@ DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
     },
     "qwen-code": {
         "label": "Qwen Code",
-        "paths": ["{cwd}/.qwen/skills", "~/.qwen/skills"],
+        "paths": ["{cwd}/.qwen/skills", "${QWEN_HOME}/skills", "~/.qwen/skills"],
         "mode": "link",
-        "docs": "QwenLM/qwen-code docs/users/features/skills.md",
+        "docs": "QwenLM/qwen-code docs; QWEN_HOME stores skills (default ~/.qwen)",
     },
     "codebuddy": {
         "label": "CodeBuddy (腾讯)",
-        "paths": ["{cwd}/.codebuddy/skills", "~/.codebuddy/skills"],
+        "paths": [
+            "{cwd}/.codebuddy/skills",
+            "${CODEBUDDY_CONFIG_DIR}/skills",
+            "~/.codebuddy/skills",
+        ],
         "mode": "link",
-        "docs": "cloud.tencent.com/document/product/1831/137020",
+        "docs": "cloud.tencent.com/document/product/1831/137020; CODEBUDDY_CONFIG_DIR",
     },
     "iflow": {
         "label": "iFlow CLI (心流)",
@@ -190,11 +201,12 @@ DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
             "{cwd}/.github/skills",
             "{cwd}/.claude/skills",
             "{cwd}/.agents/skills",
+            "${COPILOT_HOME}/skills",
             "~/.copilot/skills",
             "~/.agents/skills",
         ],
         "mode": "link",
-        "docs": "docs.github.com/copilot/concepts/agents/about-agent-skills",
+        "docs": "docs.github.com/.../cli-config-dir-reference (COPILOT_HOME; COPILOT_SKILLS_DIRS only adds search paths)",
     },
     "cursor": {
         "label": "Cursor",
@@ -498,19 +510,29 @@ def effective_agents(reg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def expand_agent_path(template: str, cwd: Path | None = None) -> tuple[Path | None, str]:
+def expand_agent_path(
+    template: str, cwd: Path | None = None
+) -> tuple[Path | None, str, bool]:
     """Expand `{cwd}`, `${VAR}`, `${VAR:-default}` and `~` in one candidate path.
 
-    Returns (path, "") on success, or (None, reason) when a referenced env var
-    is unset and has no default — such a candidate is simply skipped.
+    Returns (path, reason, env_pinned):
+      * (Path, "", pinned) on success. `pinned` is True when at least one
+        `${VAR}` in the template was resolved from the real environment —
+        i.e. the user explicitly pointed the agent's config root somewhere.
+        Pinned candidates outrank path existence (see resolve_agent_dir).
+      * (None, reason, False) when a referenced env var is unset and has no
+        default — such a candidate is simply skipped.
     """
     s = template.replace(CWD_TOKEN, str(cwd or Path.cwd()))
     missing: list[str] = []
+    pinned = False
 
     def _sub(m: re.Match[str]) -> str:
+        nonlocal pinned
         var, default = m.group(1), m.group(2)
         val = os.environ.get(var)
         if val:
+            pinned = True
             return val
         if default is not None:
             return default
@@ -519,11 +541,11 @@ def expand_agent_path(template: str, cwd: Path | None = None) -> tuple[Path | No
 
     s = ENV_TOKEN_RE.sub(_sub, s)
     if missing:
-        return None, f"环境变量未设置: {', '.join(sorted(set(missing)))}"
+        return None, f"环境变量未设置: {', '.join(sorted(set(missing)))}", False
     p = Path(s).expanduser()
     if not p.is_absolute():
         p = (cwd or Path.cwd()) / p
-    return p.resolve(), ""
+    return p.resolve(), "", pinned
 
 
 def resolve_agent_dir(
@@ -531,35 +553,56 @@ def resolve_agent_dir(
 ) -> tuple[Path, dict[str, Any]]:
     """Resolve an agent alias to the skills directory to install into.
 
-    Candidates are tried in declared order; the first one that already exists
-    wins. `create=True` creates the first resolvable candidate instead of
-    failing when none exists.
+    Two rules, in order:
+
+    1. **Env-pinned candidates win outright.** If the alias has a candidate
+       that reads a `${VAR}` which is actually set (e.g. CLAUDE_CONFIG_DIR),
+       the user has explicitly relocated that agent's config root. We then
+       either use that directory or fail — we never silently fall back to
+       `~/.claude/skills`, because a Claude Code started with
+       CLAUDE_CONFIG_DIR would not read it.
+    2. Otherwise, candidates are tried in declared order and the first one
+       that already exists wins (project scope before user scope).
+
+    `create=True` creates the winning candidate when it does not exist.
     """
     agents = effective_agents(reg)
     if alias not in agents:
         known = ", ".join(sorted(agents)) or "(none)"
         raise InputError(f"未知的 agent 别名：{alias!r}（已知：{known}）")
     spec = agents[alias]
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, bool]] = []
     skipped: list[str] = []
     for tpl in spec.get("paths", []):
-        path, reason = expand_agent_path(tpl)
+        path, reason, pinned = expand_agent_path(tpl)
         if path is None:
             skipped.append(f"{tpl}  ({reason})")
             continue
-        candidates.append(path)
+        candidates.append((path, pinned))
+
+    pinned_candidates = [(p, t) for p, t in candidates if t]
+    pool = pinned_candidates or candidates
+
+    for path, _pinned in pool:
         if path.is_dir():
             return path, spec
-    if create and candidates:
-        first = candidates[0]
+    if create and pool:
+        first = pool[0][0]
         first.mkdir(parents=True, exist_ok=True)
         print(f"created agent skills dir: {first}", file=sys.stderr)
         return first, spec
-    lines = [f"  - {p}  (不存在)" for p in candidates]
+    lines = [f"  - {p}  (不存在)" for p, _ in pool]
     lines += [f"  - {s}" for s in skipped]
     detail = "\n".join(lines) or "  (该别名没有配置任何路径)"
+    if pinned_candidates:
+        hint = (
+            f"检测到环境变量已显式指定该 agent 的配置根目录（如 CLAUDE_CONFIG_DIR），"
+            f"因此不会回退到默认路径。"
+        )
+    else:
+        hint = ""
     raise InputError(
-        f"agent '{alias}' 的目标 skills 目录都不存在：\n{detail}\n"
+        f"agent '{alias}' 的目标 skills 目录都不存在：\n{detail}\n{hint}"
         f"用 `install <name> --agent {alias} --create` 创建第一个候选目录，"
         f"或 `agents add {alias} <path> --mode link` 覆盖配置"
     )
@@ -576,12 +619,13 @@ def cmd_agents_list() -> int:
         origin = "builtin" if spec.get("builtin") else "user"
         print(f"{alias}\t{spec.get('label', alias)}\t{spec.get('mode', DEFAULT_AGENT_MODE)}\t{origin}")
         for tpl in spec.get("paths", []):
-            path, reason = expand_agent_path(tpl)
+            path, reason, pinned = expand_agent_path(tpl)
             if path is None:
                 print(f"  - {tpl}  [skip: {reason}]")
             else:
                 mark = "OK" if path.is_dir() else "missing"
-                print(f"  - {tpl}  -> {path} [{mark}]")
+                tag = " [env-pinned]" if pinned else ""
+                print(f"  - {tpl}  -> {path} [{mark}]{tag}")
     return EXIT_OK
 
 

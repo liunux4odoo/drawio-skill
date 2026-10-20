@@ -53,6 +53,20 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("SKILL_HUB_HOME", raising=False)
     monkeypatch.delenv("SKILL_HUB_DATA", raising=False)
+    # Agent config-root env vars must not leak in from the host shell: they
+    # change alias resolution semantics (env-pinned candidates win outright).
+    for var in (
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "GEMINI_CLI_HOME",
+        "QWEN_HOME",
+        "CODEBUDDY_CONFIG_DIR",
+        "COPILOT_HOME",
+        "OPENCODE_CONFIG_DIR",
+        "QWENPAW_WORKING_DIR",
+        "QWENPAW_AGENT_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
     # Reset module caches that captured paths
     import importlib
@@ -1042,3 +1056,111 @@ def test_v2_registry_migrates_to_v3(patch_download, capsys):
     assert reg["schema_version"] == 3
     assert reg["agents"] == {}
     assert "v2->v3" in capsys.readouterr().err
+
+
+# ---------- v0.5: env-configurable skills roots ----------
+
+
+def _agent_env_case(patch_download, tmp_path, monkeypatch, var, alias, root_rel, sub):
+    """Helper: env var -> root; skills live at <root>/<sub>."""
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    root = tmp_path / root_rel
+    (root / sub).mkdir(parents=True)
+    monkeypatch.setenv(var, str(root))
+    monkeypatch.chdir(tmp_path)
+    return mod, root / sub
+
+
+def test_env_pinned_wins_over_existing_default(patch_download, tmp_path, monkeypatch):
+    """CLAUDE_CONFIG_DIR set -> use it even though ~/.claude/skills also exists."""
+    mod, env_skills = _agent_env_case(
+        patch_download, tmp_path, monkeypatch, "CLAUDE_CONFIG_DIR", "claude", "cfg", "skills"
+    )
+    default_skills = Path(os.environ["HOME"]) / ".claude" / "skills"
+    default_skills.mkdir(parents=True)
+    assert run(mod, "install", "demo", "--agent", "claude") == 0
+    assert (env_skills / "demo").is_symlink()
+    assert not (default_skills / "demo").exists()
+
+
+def test_env_pinned_missing_does_not_fall_back(patch_download, tmp_path, monkeypatch):
+    """Env says where the root is; if its skills dir is absent we fail instead of
+    silently installing somewhere the agent will never read."""
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    cfg = tmp_path / "cfg"          # exists, but cfg/skills does not
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    default_skills = Path(os.environ["HOME"]) / ".claude" / "skills"
+    default_skills.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    rc = run(mod, "install", "demo", "--agent", "claude")
+    assert rc == 1
+    assert not (default_skills / "demo").exists()
+    assert not (cfg / "skills").exists()
+
+
+def test_env_pinned_create(patch_download, tmp_path, monkeypatch):
+    _, mod, _, urls = patch_download
+    _add_demo(mod, urls)
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.chdir(tmp_path)
+    assert run(mod, "install", "demo", "--agent", "claude", "--create") == 0
+    assert (cfg / "skills" / "demo").is_symlink()
+
+
+def test_env_root_qwen_code(patch_download, tmp_path, monkeypatch):
+    mod, env_skills = _agent_env_case(
+        patch_download, tmp_path, monkeypatch, "QWEN_HOME", "qwen-code", "qhome", "skills"
+    )
+    legacy = Path(os.environ["HOME"]) / ".qwen" / "skills"
+    legacy.mkdir(parents=True)
+    assert run(mod, "install", "demo", "--agent", "qwen-code") == 0
+    assert (env_skills / "demo").is_symlink()
+    assert not (legacy / "demo").exists()
+
+
+def test_env_root_copilot_and_codebuddy(patch_download, tmp_path, monkeypatch):
+    mod, cop_skills = _agent_env_case(
+        patch_download, tmp_path, monkeypatch, "COPILOT_HOME", "copilot", "cop-home", "skills"
+    )
+    assert run(mod, "install", "demo", "--agent", "copilot") == 0
+    assert (cop_skills / "demo").is_symlink()
+
+    cb_home = tmp_path / "cb-home"
+    (cb_home / "skills").mkdir(parents=True)
+    monkeypatch.setenv("CODEBUDDY_CONFIG_DIR", str(cb_home))
+    assert run(mod, "install", "demo", "--agent", "codebuddy") == 0
+    assert (cb_home / "skills" / "demo").is_symlink()
+
+
+def test_env_root_gemini_uses_dot_gemini_subdir(patch_download, tmp_path, monkeypatch):
+    """GEMINI_CLI_HOME is the *root*; Gemini creates .gemini inside it."""
+    mod, env_skills = _agent_env_case(
+        patch_download, tmp_path, monkeypatch, "GEMINI_CLI_HOME", "gemini", "groot", ".gemini/skills"
+    )
+    assert run(mod, "install", "demo", "--agent", "gemini") == 0
+    assert (env_skills / "demo").is_symlink()
+
+
+def test_env_root_codex(patch_download, tmp_path, monkeypatch):
+    mod, env_skills = _agent_env_case(
+        patch_download, tmp_path, monkeypatch, "CODEX_HOME", "codex", "cxhome", "skills"
+    )
+    assert run(mod, "install", "demo", "--agent", "codex") == 0
+    assert (env_skills / "demo").is_symlink()
+
+
+def test_agents_list_marks_env_pinned(patch_download, tmp_path, monkeypatch, capsys):
+    _, mod, _, _ = patch_download
+    cfg = tmp_path / "cfg"
+    (cfg / "skills").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    capsys.readouterr()
+    assert run(mod, "agents", "list") == 0
+    out = capsys.readouterr().out
+    line = [l for l in out.splitlines() if "CLAUDE_CONFIG_DIR" in l][0]
+    assert "[env-pinned]" in line

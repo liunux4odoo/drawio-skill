@@ -93,19 +93,33 @@ python3 $HUB remove quarkdown --purge    # store deleted too
 | Alias | Candidates (priority order) | Mode |
 |---|---|---|
 | `qwenpaw` | `${QWENPAW_WORKING_DIR}/skill_pool` → `~/.qwenpaw/skill_pool` → `…/workspaces/${QWENPAW_AGENT_ID}/skills` | copy |
-| `claude` | `{cwd}/.claude/skills` → `~/.claude/skills` | link |
-| `codex` | `{cwd}/.agents/skills` → `{cwd}/.codex/skills` → `~/.agents/skills` → `~/.codex/skills` → `/etc/codex/skills` | link |
-| `gemini` | `{cwd}/.gemini/skills` → `{cwd}/.agents/skills` → `~/.gemini/skills` → `~/.agents/skills` | link |
+| `claude` | `{cwd}/.claude/skills` → `${CLAUDE_CONFIG_DIR}/skills` → `~/.claude/skills` | link |
+| `codex` | `{cwd}/.agents/skills` → `{cwd}/.codex/skills` → `${CODEX_HOME}/skills` → `~/.agents/skills` → `~/.codex/skills` → `/etc/codex/skills` | link |
+| `gemini` | `{cwd}/.gemini/skills` → `{cwd}/.agents/skills` → `${GEMINI_CLI_HOME}/.gemini/skills` → `~/.gemini/skills` → `~/.agents/skills` | link |
 | `opencode` | `{cwd}/.opencode/skills` → `{cwd}/.claude/skills` → `{cwd}/.agents/skills` → `~/.config/opencode/skills` → `~/.claude/skills` → `~/.agents/skills` | link |
 | `cursor` | `{cwd}/.cursor/skills` → `{cwd}/.agents/skills` → `{cwd}/.claude/skills` → `{cwd}/.codex/skills` → `~/.cursor/skills` → `~/.agents/skills` → `~/.claude/skills` → `~/.codex/skills` | link |
-| `copilot` | `{cwd}/.github/skills` → `{cwd}/.claude/skills` → `{cwd}/.agents/skills` → `~/.copilot/skills` → `~/.agents/skills` | link |
-| `qwen-code` | `{cwd}/.qwen/skills` → `~/.qwen/skills` | link |
-| `codebuddy` | `{cwd}/.codebuddy/skills` → `~/.codebuddy/skills` | link |
+| `copilot` | `{cwd}/.github/skills` → `{cwd}/.claude/skills` → `{cwd}/.agents/skills` → `${COPILOT_HOME}/skills` → `~/.copilot/skills` → `~/.agents/skills` | link |
+| `qwen-code` | `{cwd}/.qwen/skills` → `${QWEN_HOME}/skills` → `~/.qwen/skills` | link |
+| `codebuddy` | `{cwd}/.codebuddy/skills` → `${CODEBUDDY_CONFIG_DIR}/skills` → `~/.codebuddy/skills` | link |
 | `iflow` | `{cwd}/.iflow/skills` → `~/.iflow/skills` | link |
 | `qoder` | `{cwd}/.qoder/skills` → `~/.qoder/skills` | link |
 | `trae` | `{cwd}/.trae/skills` → `~/.trae/skills` | link |
 
 Templates: `{cwd}` = current dir, `${VAR}` = env, `${VAR:-default}` = env with fallback, `~` = home. An unresolved var without default ⇒ that candidate is **skipped**.
+
+**Env-pinned rule**: a candidate that reads a `${VAR}` which *is* set is authoritative — if `CLAUDE_CONFIG_DIR` points somewhere, install either uses `$CLAUDE_CONFIG_DIR/skills` or fails; it never silently falls back to `~/.claude/skills` (a Claude started with that var would not read the default path). `agents list` tags those rows `[env-pinned]`. Add `--create` when the pinned `skills/` dir does not exist yet.
+
+| Env var | Effect |
+|---|---|
+| `CLAUDE_CONFIG_DIR` | Claude Code: `$VAR/skills` |
+| `CODEX_HOME` | Codex: `$VAR/skills` |
+| `GEMINI_CLI_HOME` | Gemini: `$VAR/.gemini/skills` (var is the root) |
+| `QWEN_HOME` | Qwen Code: `$VAR/skills` |
+| `CODEBUDDY_CONFIG_DIR` | CodeBuddy: `$VAR/skills` |
+| `COPILOT_HOME` | Copilot CLI: `$VAR/skills` |
+| `QWENPAW_WORKING_DIR` | QwenPaw: `$VAR/skill_pool` |
+
+Not install roots: `OPENCODE_CONFIG_DIR` (docs cover agents/commands/modes/plugins, never skills) and `COPILOT_SKILLS_DIRS` (extra search paths only).
 
 Modes: link everywhere except `qwenpaw` (copy — manifest-managed pool). `--link` / `--copy` on `install` override the alias mode.
 
@@ -126,7 +140,7 @@ python3 $HUB agents reset trae                            # restore built-in
 python3 $HUB agents reset                                 # clear ALL overrides
 ```
 
-Precedence rule of thumb: project-scoped candidates (`{cwd}/...`) win only when they exist; otherwise the user-global candidate is used. If neither exists, nothing is created without `--create`.
+Precedence rule of thumb: env-pinned roots (see above) beat everything; otherwise project-scoped candidates (`{cwd}/...`) win when they exist, then the user-global candidate. If none exists, nothing is created without `--create`.
 
 ## `remove` vs `uninstall` — scope table
 
