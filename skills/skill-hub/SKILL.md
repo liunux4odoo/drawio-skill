@@ -79,6 +79,6 @@ vars, and path sources live in `references/agents.md`.
 
 | File | Load when |
 |---|---|
-| `references/quick-reference.md` | Full verb/flag list, URL forms, name inference, update-flow detail, one-liners |
+| `references/commands.md` | Full verb/flag list, URL forms, name inference, update-flow detail, one-liners |
 | `references/agents.md` | Choosing or adding an agent alias, env-configurable roots, path sources |
 | `references/registry.md` | Inspecting or hand-editing `registry.json`, schema migrations, link vs copy |

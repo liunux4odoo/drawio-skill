@@ -25,7 +25,9 @@ skills/
 ├── skill-hub/
 │   ├── SKILL.md              # install/maintain skills from user-specified URLs
 │   ├── references/
-│   │   └── quick-reference.md    # subcommand cheat sheet + registry schema
+│   │   ├── commands.md           # every verb/flag, URL forms, update flow
+│   │   ├── agents.md             # agent alias table, env roots, path sources
+│   │   └── registry.md           # registry schema, migrations, link vs copy
 │   └── scripts/
 │       └── skill_hub.py          # stdlib-only registry: add/install/update/list/status/uninstall
 └── qwenpaw/
