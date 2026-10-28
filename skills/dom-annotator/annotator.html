@@ -92,6 +92,15 @@
     word-break: break-all;
   }
   .page-name:empty { display: none; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 4px; }
+  .tab {
+    background: #333; color: var(--dim); border: 1px solid var(--border);
+    border-radius: 3px; font-size: 11px; padding: 2px 8px; cursor: pointer;
+    font-family: inherit;
+  }
+  .tab.active { background: var(--acc); border-color: var(--acc); color: #fff; }
+  .tab.stale-tab.active { background: #a05; border-color: #a05; }
+  .tab span { opacity: .8; }
   .list { flex: 1 1 auto; overflow: auto; padding: 8px; }
   .empty { color: #666; font-size: 12px; padding: 16px 8px; line-height: 1.8; }
   .empty kbd {
@@ -138,12 +147,15 @@
   details textarea { min-height: 40px; margin-top: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
   .aside-foot { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
   .aside-foot button {
-    flex: 1 1 0; background: #333; color: var(--dim); border: 1px solid var(--border);
-    border-radius: 3px; padding: 5px; font-size: 12px; cursor: pointer; font-family: inherit;
-    white-space: nowrap;
+    flex: 1 1 0; background: #3a3a3a; color: #f0f0f0; border: 1px solid #555;
+    border-radius: 3px; padding: 6px; font-size: 12px; cursor: pointer; font-family: inherit;
+    white-space: nowrap; font-weight: 500;
   }
-  .aside-foot button:hover { color: var(--fg); border-color: var(--acc); }
-  .aside-foot button#btn-clear:hover { color: var(--hot); border-color: var(--hot); }
+  .aside-foot button:hover { background: #4a4a4a; border-color: var(--acc); color: #fff; }
+  .aside-foot button#btn-save-disk { background: #1e4d2e; border-color: #2a6b3f; color: #d8f0df; }
+  .aside-foot button#btn-save-disk:hover { background: #27643c; border-color: #3a8a54; }
+  .aside-foot button#btn-clear { background: #4a2a2a; border-color: #6a3a3a; color: #f3d9d9; }
+  .aside-foot button#btn-clear:hover { background: #5d3333; border-color: #a05; color: #fff; }
   .chip {
     font-size: 11px; color: #6cc47a; background: #16241a;
     border: 1px solid #2f5a37; border-radius: 10px; padding: 1px 8px;
@@ -181,16 +193,16 @@
 </head>
 <body>
 <header>
-  <button id="btn-open">📁 加载单个 HTML</button>
+  <button id="btn-open">加载单个 HTML</button>
   <input id="file-input" type="file" accept=".html,.htm,.xhtml,.txt,text/html" hidden>
-  <button id="btn-open-dir">📂 打开文件夹</button>
+  <button id="btn-open-dir">打开文件夹</button>
   <input id="dir-input" type="file" webkitdirectory directory multiple hidden>
-  <button id="btn-restore" hidden>↩ 恢复上次文件夹</button>
+  <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.5</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.6</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
-  <button id="btn-url">🌐 加载</button>
+  <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
     <option value="fit">视口：自适应</option>
     <option value="360x640">360×640 手机</option>
@@ -200,12 +212,12 @@
     <option value="1280x800">1280×800 笔记本</option>
     <option value="1920x1080">1920×1080 台式</option>
   </select>
-  <button id="btn-mode">🎯 标注模式：关</button>
+  <button id="btn-mode">标注模式：关</button>
   <span class="vp-size" id="vp-size"></span>
   <span class="spacer"></span>
-  <button id="btn-export">💾 导出 JSON</button>
-  <button id="btn-copy">📋 复制 JSON</button>
-  <button id="btn-copy-md">📝 复制 Markdown</button>
+  <button id="btn-export">导出 JSON</button>
+  <button id="btn-copy">复制 JSON</button>
+  <button id="btn-copy-md">复制 Markdown</button>
 </header>
 <div id="status" class="status">就绪</div>
 <div id="notice" class="notice"></div>
@@ -216,12 +228,16 @@
   <aside>
     <div class="aside-head">
       <div class="page-name" id="page-name" title="当前标注的页面"></div>
+      <div class="tabs">
+        <button class="tab active" data-tab="active">有效 <span id="cnt-active"></span></button>
+        <button class="tab stale-tab" data-tab="stale">已失效 <span id="cnt-stale"></span></button>
+      </div>
       本页 <span id="count">0</span> 条 · 共 <span id="total">0</span> 条 / <span id="pages">0</span> 页
     </div>
     <div id="list" class="list"></div>
     <div class="aside-foot">
-      <button id="btn-save-disk" title="直接写入所选目录的 .dom-annotator/annotations.json">💾 保存到项目</button>
-      <button id="btn-clear">🗑️ 清空全部</button>
+      <button id="btn-save-disk" title="直接写入所选目录的 .dom-annotator/annotations.json">保存到项目</button>
+      <button id="btn-clear">清空全部</button>
     </div>
   </aside>
 </main>
@@ -376,6 +392,8 @@
     var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
     return {
       tagName: el.tagName.toLowerCase(),
+      idAttr: el.getAttribute('id') || '',
+      testidAttr: el.getAttribute('data-testid') || '',
       role: el.getAttribute('role') || '',
       ariaLabel: el.getAttribute('aria-label') || '',
       childCount: el.children ? el.children.length : 0,
@@ -518,7 +536,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.5';
+  var VERSION = '0.6';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -553,6 +571,7 @@
     sessionKey: '',
     byPage: {},
     annotations: [],
+    tab: 'active',
     mode: false,
     dirFiles: null,
     entries: [],
@@ -703,20 +722,31 @@
   /* ---------- 渲染 ---------- */
 
   function render() {
-    countEl.textContent = String(state.annotations.length);
+    var staleCount = state.annotations.filter(function (a) { return !!a.stale; }).length;
+    var activeCount = state.annotations.length - staleCount;
     totalEl.textContent = String(totalAnnotations());
     pagesEl.textContent = String(annotatedPages().length);
     pageNameEl.textContent = state.page || '';
+    document.getElementById('cnt-active').textContent = String(activeCount);
+    document.getElementById('cnt-stale').textContent = String(staleCount);
 
-    if (!state.annotations.length) {
+    var visible = state.annotations.filter(function (a) {
+      return state.tab === 'stale' ? !!a.stale : !a.stale;
+    });
+    countEl.textContent = String(visible.length);
+
+    if (!visible.length) {
       var hint = state.dirFiles
         ? '<br><br>本页还没有批注；页面里的站内链接可以直接点，切页不会丢失其它页的批注。'
         : '';
-      listEl.innerHTML = '<div class="empty">还没有批注。<br>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击右侧页面中的元素，或打开「标注模式」后直接点击。<br><br>点「定位」可回看元素位置。' + hint + '</div>';
+      var emptyMsg = state.tab === 'stale'
+        ? '没有失效批注。<br>失效 = 页面重载后选择器匹配不到元素（或匹配到的元素与记录不一致）。'
+        : '还没有批注。<br>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击右侧页面中的元素，或打开「标注模式」后直接点击。<br><br>点「定位」可回看元素位置。' + hint;
+      listEl.innerHTML = '<div class="empty">' + emptyMsg + '</div>';
       return;
     }
 
-    var html = state.annotations.map(function (a, i) {
+    var html = visible.map(function (a, i) {
       var typeBtns = TYPES.map(function (t) {
         return '<button data-act="type" data-id="' + a.id + '" data-type="' + t[0] + '"' +
           (a.type === t[0] ? ' class="active"' : '') + '>' + t[1] + '</button>';
@@ -727,10 +757,10 @@
           '<div class="card-head">' +
             '<span class="idx">#' + (i + 1) + '</span>' +
             '<span class="tag">' + escapeHtml(a.tagName || '?') + '</span>' +
-            (a.stale ? '<span class="stale-tag" title="重载后该 selector 已匹配不到元素">⚠ 已失效</span>' : '') +
+            (a.stale ? '<span class="stale-tag" title="页面重载后该选择器匹配不到元素，或匹配到的元素与记录不一致">已失效</span>' : '') +
             '<span class="actions">' +
               '<button data-act="focus" data-id="' + a.id + '">定位</button>' +
-              '<button data-act="del" data-id="' + a.id + '">✕</button>' +
+              '<button data-act="del" data-id="' + a.id + '" title="删除该批注">删</button>' +
             '</span>' +
           '</div>' +
           '<div class="sel" data-act="focus" data-id="' + a.id + '" title="' + escapeHtml(a.xpath || '') + '">' +
@@ -789,10 +819,12 @@
     } else {
       state.annotations.push({
         id: 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        type: 'style',
+        type: 'global',
         selector: p.selector,
         xpath: p.xpath,
         tagName: p.tagName,
+        idAttr: p.idAttr || '',
+        testidAttr: p.testidAttr || '',
         childCount: p.childCount || 0,
         srcValue: p.srcValue || '',
         rect: p.rect,
@@ -1162,15 +1194,31 @@
     });
   }
 
-  // 重载后标记 selector 已失效的批注（元素被删/改名）
+  // 重载后标记 selector 已失效的批注（元素被删/改名/匹配到错误元素）
   function markStale() {
     var doc = null;
     try { doc = frame.contentDocument; } catch (e) { return; }
     if (!doc) { return; }
+
     state.annotations.forEach(function (a) {
-      var ok = true;
-      try { ok = !!doc.querySelector(a.selector); } catch (e) { ok = false; }
-      a.stale = !ok;
+      var el = null;
+      try { el = doc.querySelector(a.selector); } catch (e) { el = null; }
+      if (!el) {
+        a.stale = true;
+        return;
+      }
+      // 校验匹配到的元素是否真的是原来那个：tag / id / data-testid 强校验
+      if (a.tagName && el.tagName.toLowerCase() !== a.tagName) { a.stale = true; return; }
+      if (a.idAttr && el.getAttribute('id') !== a.idAttr) { a.stale = true; return; }
+      if (a.testidAttr && el.getAttribute('data-testid') !== a.testidAttr) { a.stale = true; return; }
+      // 无强锚点（路径/class 选择器）时：比对子元素结构 + 文本前缀，避免误匹配
+      if (!a.idAttr && !a.testidAttr) {
+        var textNow = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        var prefix = a.textSnippet ? a.textSnippet.slice(0, 12) : '';
+        if (a.childCount != null && el.children.length !== a.childCount) { a.stale = true; return; }
+        if (prefix && textNow.slice(0, 12) !== prefix) { a.stale = true; return; }
+      }
+      a.stale = false;
     });
     render();
     reapplyLive();
@@ -1218,7 +1266,7 @@
       try {
         var url = new URL(frame.contentWindow.location.href);
         url.searchParams.set('_t', String(Date.now()));
-        status('↻ 检测到文件变化，正在刷新…');
+        status('[刷新] 检测到文件变化，正在刷新…');
         frame.src = url.toString();
       } catch (err) { /* ignore */ }
     }, 400);
@@ -1559,7 +1607,7 @@
     html += '<div class="qrow">' +
       '<button data-act="write-src" data-id="' + a.id + '"' +
       (canWrite ? '' : ' disabled title="只有服务模式可写源文件"') + '>写入源文件</button>' +
-      (a.applied ? '<span class="qhint">✓ 已写入</span>' : '') +
+      (a.applied ? '<span class="qhint">[已写入]</span>' : '') +
       '<span class="qhint" data-for="' + a.id + '"></span>' +
       '</div>';
 
@@ -1776,7 +1824,7 @@
     var btn = document.getElementById('btn-restore');
     if (btn) {
       btn.hidden = false;
-      btn.textContent = '↩ 恢复 ' + (handle.name || '上次文件夹');
+      btn.textContent = '恢复 ' + (handle.name || '上次文件夹');
     }
     status('上次打开的文件夹「' + (handle.name || '') + '」可一键恢复，点左上角按钮授权', 'ok');
   }
@@ -1832,7 +1880,7 @@
       if (!state.page || state.busy) { return; }
       var page = state.page;
       state.sig = null;
-      status('↻ ' + (reason || '文件已变化') + '，正在重载 ' + page + ' …');
+      status('[刷新] ' + (reason || '文件已变化') + '，正在重载 ' + page + ' …');
       loadEntry(page);
     }, 500);
   }
@@ -1863,7 +1911,7 @@
 
   async function saveToDisk() {
     if (!state.dirHandle) {
-      status('只有「📂 打开文件夹」模式能直接写入；当前请用「💾 导出 JSON」', 'warn');
+      status('只有「打开文件夹」模式能直接写入；当前请用「导出 JSON」', 'warn');
       return;
     }
     if (!state.writable) {
@@ -1908,8 +1956,8 @@
     }
 
     if (brokenCss.length || brokenImg) {
-      setNotice('⚠️ 外部资源没有加载：' + brokenCss.length + ' 个样式表、' + brokenImg + ' 张图片。' +
-        '单个 HTML 文件模式无法解析相对路径——请改用「📂 打开文件夹」（自动内联 CSS/图片/脚本），' +
+      setNotice('[警告] 外部资源没有加载：' + brokenCss.length + ' 个样式表、' + brokenImg + ' 张图片。' +
+        '单个 HTML 文件模式无法解析相对路径——请改用「打开文件夹」（自动内联 CSS/图片/脚本），' +
         '或在目标目录运行 <code>python3 -m http.server 8000</code> 后用 URL 加载。');
     } else {
       setNotice('');
@@ -2010,7 +2058,7 @@
 
   btnMode.addEventListener('click', function () {
     state.mode = !state.mode;
-    btnMode.textContent = '🎯 标注模式：' + (state.mode ? '开' : '关');
+    btnMode.textContent = '标注模式：' + (state.mode ? '开' : '关');
     btnMode.classList.toggle('on', state.mode);
     var da = getDA();
     if (da) {
@@ -2020,6 +2068,16 @@
   });
 
   /* ---------- 列表交互 ---------- */
+
+  document.querySelector('.aside-head .tabs').addEventListener('click', function (e) {
+    var btn = e.target.closest('.tab');
+    if (!btn) { return; }
+    state.tab = btn.getAttribute('data-tab') === 'stale' ? 'stale' : 'active';
+    document.querySelectorAll('.aside-head .tab').forEach(function (t) {
+      t.classList.toggle('active', t === btn);
+    });
+    render();
+  });
 
   listEl.addEventListener('click', function (e) {
     var el = e.target.closest('[data-act]');
@@ -2296,7 +2354,7 @@
 
   function handleNavigate(href) {
     if (!state.dirFiles) {
-      status('页面内链接跳转只在「📂 打开文件夹」模式下支持（单文件 / URL 模式无法解析目标文件）', 'warn');
+      status('页面内链接跳转只在「打开文件夹」模式下支持（单文件 / URL 模式无法解析目标文件）', 'warn');
       return;
     }
     var target = resolveNavTarget(href);
@@ -2324,8 +2382,8 @@
     'kbd{background:#eee;border:1px solid #ccc;border-bottom-width:2px;border-radius:3px;padding:0 5px;font-size:12px;color:#555}' +
     'code{background:#f4f4f4;padding:1px 5px;border-radius:3px;font-size:12px;color:#666}</style></head><body>' +
     '<h2>DOM Annotator</h2>' +
-    '<p>推荐点「📂 打开文件夹」——CSS / 图片 / 脚本会自动内联，多页面可直接点链接切换</p>' +
-    '<p>也可以点「📁 加载单个 HTML」，或在上方输入 URL 后回车</p>' +
+    '<p>推荐点「打开文件夹」——CSS / 图片 / 脚本会自动内联，多页面可直接点链接切换</p>' +
+    '<p>也可以点「加载单个 HTML」，或在上方输入 URL 后回车</p>' +
     '<p>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击元素添加批注，或打开「标注模式」直接点</p>' +
     '<p style="margin-top:20px;font-size:12px;color:#999">导出 JSON 放到工作区 <code>.dom-annotator/annotations.json</code>，再让 agent 按标注改</p>' +
     '</body></html>';
