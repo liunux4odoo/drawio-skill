@@ -65,13 +65,30 @@ VOID_TAGS = {
 }
 STYLE_ALLOW = {
     "color", "background-color", "background", "border-color",
-    "font-size", "font-weight", "font-family", "line-height",
+    "font-size", "font-weight", "font-style", "font-family", "line-height",
+    "text-decoration", "text-decoration-line", "text-decoration-style",
+    "text-decoration-color", "text-decoration-thickness",
     "width", "height", "max-width", "min-width", "max-height", "min-height",
     "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
     "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
     "border-radius", "border-width", "border-style", "border",
     "gap", "display", "visibility", "opacity", "text-align", "letter-spacing",
 }
+
+# 请求体大小上限（防误提交超大 JSON）
+MAX_BODY = 5 * 1024 * 1024
+
+# 与 html.parser 的 attrfind_tolerant 语义对齐的属性名 / 无引号值 token
+_ATTR_NAME_RE = re.compile(r"[^\s\"'\u0060=<>/]+")
+_ATTR_VALUE_RE = re.compile(r"[^\s\"'\u0060=<>]+")
+
+# 源文件改写串行化（读-改-写原子化），避免并发 apply 互相覆盖
+APPLY_LOCK = threading.Lock()
+
+# SSE 文件监听：单个后台线程统一扫描，所有连接经 Condition 广播变化
+_sse_cond = threading.Condition()
+_sse_gen = 0
+_sse_running = False
 
 
 class EditError(Exception):
@@ -156,12 +173,63 @@ class _Tree(HTMLParser):
         return len(self.src) - 1
 
     def _attr_spans(self, start, close, attrs):
+        """定位起始标签内各属性的值区间。
+
+        支持带引号 / 无引号 / 无值（布尔）三种属性写法；属性名按 HTMLParser
+        规则转为小写，并以属性名 token 为单位匹配，避免 ``id`` 误中
+        ``data-id``、``src`` 误中 ``srcset`` 之类的前缀/后缀碰撞。
+        布尔属性（无 ``=``）的区间覆盖整个属性名，替换后得到 ``name="value"``。
+        """
         frag = self.src[start:close + 1]
         spans = {}
-        for name in attrs:
-            m = re.search(r"\b" + re.escape(name) + r"\s*=\s*([\"'])(.*?)\1", frag, re.S)
-            if m:
-                spans[name] = (start + m.start(2), start + m.end(2))
+        n = len(frag)
+        i = 0
+        # 跳过起始标签名（第一个 token）
+        m = _ATTR_NAME_RE.match(frag, 1)
+        if m:
+            i = 1 + m.end()
+        while i < n:
+            ch = frag[i]
+            if ch.isspace() or ch in "/>":
+                i += 1
+                continue
+            m = _ATTR_NAME_RE.match(frag, i)
+            if not m:
+                i += 1
+                continue
+            raw = m.group(0)
+            name = raw.lower()
+            name_end = i + len(raw)
+            if name not in spans:
+                j = name_end
+                while j < n and frag[j].isspace():
+                    j += 1
+                if j < n and frag[j] == "=":
+                    j += 1
+                    while j < n and frag[j].isspace():
+                        j += 1
+                    if j < n and frag[j] in "\"'":
+                        q = frag[j]
+                        end = frag.find(q, j + 1)
+                        if end == -1:
+                            end = n - 1
+                        spans[name] = (start + j + 1, start + end)
+                        i = end + 1
+                        continue
+                    if j < n:
+                        vm = _ATTR_VALUE_RE.match(frag, j)
+                        if vm:
+                            spans[name] = (start + j, start + vm.end())
+                            i = vm.end()
+                            continue
+                        # 空值 ``name=``：区间覆盖 ``name=``，标记 bare，替换为 name="value"
+                        spans[name] = (start + i, start + j, True)
+                        i = j
+                        continue
+                else:
+                    # 无值布尔属性：区间 = 属性名 token，第三位标记 bare
+                    spans[name] = (start + i, start + name_end, True)
+            i = max(name_end, i + 1)
         return spans
 
     def _open(self, tag, attrs, self_closing):
@@ -245,6 +313,10 @@ def set_style(pairs, prop, value, important):
     prop = prop.strip().lower()
     if prop not in STYLE_ALLOW:
         raise EditError("style-not-allowed", "不支持的样式属性：%s" % prop)
+    value = str(value).strip()
+    if value.lower().endswith("!important"):
+        value = value[:-len("!important")].strip()
+        important = True
     if any(ch in value for ch in ";}{"):
         raise EditError("bad-value", "样式值非法：%r" % value)
     for item in pairs:
@@ -309,7 +381,12 @@ def apply_edits(src: str, target: dict, edits: list):
             value = str(edit.get("value", ""))
             span = node.attr_spans.get(name)
             if span:
-                ops.append((span[0], span[1], escape_attr(value)))
+                if len(span) == 3:
+                    # 无值/空值布尔属性：区间覆盖属性名（或 name=），
+                    # 直接写成 name="value"，避免产生重复属性
+                    ops.append((span[0], span[1], '%s="%s"' % (name, escape_attr(value))))
+                else:
+                    ops.append((span[0], span[1], escape_attr(value)))
             else:
                 insert_attrs.append((name, value))
             changed.append({"kind": "attr", "name": name})
@@ -406,6 +483,13 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code: int, msg: str) -> None:
         self._json({"error": msg}, code)
 
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("Host") or "").strip()
+        if not host:
+            return True
+        name = host.split(":", 1)[0].strip().lower().strip("[]")
+        return name in ("127.0.0.1", "localhost", "::1")
+
     def log_message(self, fmt, *args):  # 静默，避免污染 agent 的终端
         if os.environ.get("DA_VERBOSE"):
             sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -415,6 +499,9 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        if not self._host_ok():
+            self._error(403, "forbidden host")
+            return
         parsed = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parsed.path)
 
@@ -432,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
                 "entry": ENTRY,
                 "entries": list_html(ROOT),
                 "writeMode": WRITE_MODE,
-                "version": "0.5",
+                "version": "0.6",
             })
             return
         if path == "/__da__/files":
@@ -445,6 +532,9 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static(path)
 
     def do_POST(self):
+        if not self._host_ok():
+            self._error(403, "forbidden host")
+            return
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == "/__da__/apply":
             self._apply_edits()
@@ -457,6 +547,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
+        if length > MAX_BODY:
+            self._error(413, "payload too large")
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             data = json.loads(raw.decode("utf-8"))
@@ -543,6 +636,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
+        if length > MAX_BODY:
+            self._error(413, "payload too large")
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             req = json.loads(raw.decode("utf-8"))
@@ -562,35 +658,36 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, "not an html file")
             return
 
-        try:
-            with open(full, encoding="utf-8") as fh:
-                src = fh.read()
-        except UnicodeDecodeError:
-            self._error(422, "source is not valid utf-8")
-            return
-        except OSError as exc:
-            self._error(500, str(exc))
-            return
+        with APPLY_LOCK:
+            try:
+                with open(full, encoding="utf-8") as fh:
+                    src = fh.read()
+            except UnicodeDecodeError:
+                self._error(422, "source is not valid utf-8")
+                return
+            except OSError as exc:
+                self._error(500, str(exc))
+                return
 
-        try:
-            new_src, changed = apply_edits(src, req.get("target") or {}, req.get("edits") or [])
-        except EditError as exc:
-            self._json({"ok": False, "reason": exc.reason, "error": exc.message}, 422)
-            return
+            try:
+                new_src, changed = apply_edits(src, req.get("target") or {}, req.get("edits") or [])
+            except EditError as exc:
+                self._json({"ok": False, "reason": exc.reason, "error": exc.message}, 422)
+                return
 
-        if new_src == src:
-            self._json({"ok": True, "changed": [], "backup": "", "note": "源文件无需改动"})
-            return
+            if new_src == src:
+                self._json({"ok": True, "changed": [], "backup": "", "note": "源文件无需改动"})
+                return
 
-        try:
-            bak = backup_file(rel.replace(os.sep, "/"), full)
-            tmp = full + ".da-tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(new_src)
-            os.replace(tmp, full)
-        except OSError as exc:
-            self._error(500, "write failed: %s" % exc)
-            return
+            try:
+                bak = backup_file(rel.replace(os.sep, "/"), full)
+                tmp = full + ".da-tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(new_src)
+                os.replace(tmp, full)
+            except OSError as exc:
+                self._error(500, "write failed: %s" % exc)
+                return
 
         self._json({
             "ok": True,
@@ -613,14 +710,18 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return
 
-        last = scan(ROOT)
+        # 每个连接不各自扫描目录：由共享的 _sse_watcher_loop 统一扫描并广播
+        start_sse_watcher()
+        with _sse_cond:
+            seen = _sse_gen
         last_beat = time.time()
         try:
             while WATCHING:
-                time.sleep(0.7)
-                cur = scan(ROOT)
-                if cur != last:
-                    last = cur
+                with _sse_cond:
+                    gen = _sse_gen
+                    _sse_cond.wait(timeout=0.7)
+                if gen != seen:
+                    seen = gen
                     self.wfile.write(b"data: change\n\n")
                     self.wfile.flush()
                     last_beat = time.time()
@@ -630,6 +731,39 @@ class Handler(BaseHTTPRequestHandler):
                     last_beat = time.time()
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
+
+
+def start_sse_watcher() -> None:
+    """启动共享文件监听线程：每个进程只扫一遍目录，SSE 连接共享其结果。"""
+    global _sse_running
+    with _sse_cond:
+        if _sse_running:
+            return
+        _sse_running = True
+        threading.Thread(target=_sse_watcher_loop, daemon=True,
+                         name="da-sse-watcher").start()
+
+
+def stop_sse_watcher() -> None:
+    global _sse_running
+    with _sse_cond:
+        _sse_running = False
+
+
+def _sse_watcher_loop() -> None:
+    global _sse_gen
+    last = None
+    while True:
+        with _sse_cond:
+            if not _sse_running:
+                return
+        cur = scan(ROOT)
+        with _sse_cond:
+            if cur != last:
+                last = cur
+                _sse_gen += 1
+                _sse_cond.notify_all()
+        time.sleep(0.7)
 
 
 def pick_port(preferred: int) -> int:
@@ -693,6 +827,7 @@ def main() -> int:
         pass
     finally:
         WATCHING = False
+        stop_sse_watcher()
         httpd.shutdown()
         httpd.server_close()
     return 0

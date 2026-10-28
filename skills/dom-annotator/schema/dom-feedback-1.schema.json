@@ -21,7 +21,7 @@
     },
     "pages": {
       "type": "array",
-      "description": "本次会话中产生过批注的全部页面（目录内相对路径或 URL）。单页面时通常只有一个元素。",
+      "description": "本次会话中产生过批注的全部页面（目录内相对路径或 URL）。单页面会话通常只涉及一个页面。",
       "items": { "type": "string" }
     },
     "timestamp": {

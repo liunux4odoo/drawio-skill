@@ -84,7 +84,7 @@ cat .dom-annotator/annotations.json
   page: string,                  // 所属页面（目录内相对路径或 URL）；多页面时按此分组
   selector: string,              // CSS Selector（优先定位）
   xpath?: string,                // 备用 XPath
-  rect: DOMRect,                 // 当时可视区域 {x,y,width,height,top,left,bottom,right}
+  rect: DOMRect,                 // 当时可视区域 {x,y,width,height,top,left,bottom,right,pageX,pageY}
   computedStyle?: CSSStyleDeclaration,  // 关键样式快照
   text: string,                  // 用户修改意见（AI 修改框内容）
   suggestedChanges?: {           // 可选：手动修改面板生成的结构化建议
@@ -100,11 +100,14 @@ cat .dom-annotator/annotations.json
 
 | 字段 | 定位方式 | 修改动作 |
 |------|----------|----------|
-| `suggestedChanges.css` | `document.querySelector(selector)` | 逐条 `Object.assign(el.style, suggestedChanges.css)` |
+| `suggestedChanges.css` | `document.querySelector(selector)` | 逐条 `el.style.setProperty(k, v, priority)`；值末尾的 ` !important` 拆出来作为 priority（`Object.assign` 会把 `red !important` 当非法值而静默失败） |
 | `suggestedChanges.attributes` | 同上 | `Object.entries(...).forEach(([k,v]) => el.setAttribute(k,v))` |
 | `suggestedChanges.innerHTML` | 同上 | `el.innerHTML = suggestedChanges.innerHTML` |
 | `suggestedChanges.delete` | 同上 | 删除整个元素（含子内容） |
 | 只有 `text` 意见 | 同上 | 结合自然语言需求判断改法 |
+
+**`appliedToSource: true` 的条目不再携带 `suggestedChanges`**（改动已在源文件中）；
+若标注页里之后又产生新改动，导出会自动重新带上 `suggestedChanges`。
 
 **定位失败时**：
 1. 尝试 `xpath`（需 xpath 库）

@@ -218,7 +218,7 @@
   <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.8</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.11</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
   <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
@@ -566,7 +566,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.10';
+  var VERSION = '0.11';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -1279,7 +1279,9 @@
       if (!a.idAttr && !a.testidAttr) {
         var textNow = (el.textContent || '').replace(/\s+/g, ' ').trim();
         var prefix = a.textSnippet ? a.textSnippet.slice(0, 12) : '';
-        if (a.childCount != null && el.children.length !== a.childCount) { a.stale = true; return; }
+        // 子元素数量只在元素「叶子/少量子元素」时有判别力；JS 动态渲染的
+        // 页面上大子元素树的数量会正常波动，放宽到小数量时才严格比对
+        if (a.childCount != null && a.childCount <= 8 && el.children.length !== a.childCount) { a.stale = true; return; }
         if (prefix && textNow.slice(0, 12) !== prefix) { a.stale = true; return; }
       }
       a.stale = false;
@@ -1419,6 +1421,8 @@
     var restoreBtn = document.getElementById('btn-restore');
     if (restoreBtn) { restoreBtn.hidden = true; }
     setWatchChip('服务模式 · 自动刷新');
+    var verChip = document.getElementById('ver-chip');
+    if (verChip) { verChip.textContent = 'v' + VERSION + ' · 服务 v' + (info.version || '?'); }
     subscribeServerWatch();
     loadImageList();
     loadServerPage(entrySelect.value || info.entry || 'index.html');
@@ -1444,6 +1448,18 @@
   /* ---------- 快速修改：预览 + 结构化写回源文件 ---------- */
 
   var QUICK_PROPS = ['color', 'background-color', 'font-size', 'border-radius', 'padding', 'width', 'height'];
+
+  // 简写属性拿不到 computed 值（浏览器只暴露 longhand），升级 !important 时
+  // 用这些 longhand 做等价判断；未列出的属性直接比较自身。
+  var LONGHAND_CHECK = {
+    'padding': ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
+    'margin': ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+    'border': ['border-top-width', 'border-top-style', 'border-top-color'],
+    'background': ['background-color', 'background-image'],
+    'text-decoration': ['text-decoration-line', 'text-decoration-color'],
+    'border-radius': ['border-top-left-radius'],
+    'gap': ['row-gap']
+  };
 
   function toHexColor(value) {
     if (!value) { return '#000000'; }
@@ -1481,7 +1497,10 @@
     return a.liveEdits;
   }
 
+  // 在隔离 div 上测量 prop 的实际计算值：返回「可比较属性 -> 期望计算值」映射。
+  // 简写属性（padding/background/...）取对应 longhand，普通属性取自身。
   function probeComputed(prop, value) {
+    var out = {};
     try {
       var doc = frame.contentDocument;
       var win = frame.contentWindow;
@@ -1491,10 +1510,14 @@
       el.style.left = '-9999px';
       el.style.visibility = 'hidden';
       (doc.body || doc.documentElement).appendChild(el);
-      var got = win.getComputedStyle(el).getPropertyValue(prop).trim();
+      var checks = LONGHAND_CHECK[prop] || [prop];
+      for (var i = 0; i < checks.length; i++) {
+        var v = win.getComputedStyle(el).getPropertyValue(checks[i]).trim();
+        if (v) { out[checks[i]] = v; }
+      }
       el.remove();
-      return got;
-    } catch (e) { return ''; }
+    } catch (e) { /* ignore */ }
+    return out;
   }
 
   // 把 liveEdits 应用到预览 DOM；被更高优先级规则压制时自动升级 !important
@@ -1507,10 +1530,15 @@
     Object.keys(le.style).forEach(function (prop) {
       var rec = le.style[prop];
       el.style.setProperty(prop, rec.value);
+      // 逐个可比较属性比对：目标元素计算值与隔离 div 不一致 => 被更高优先级压制
       var expected = probeComputed(prop, rec.value);
-      var got = '';
-      try { got = win.getComputedStyle(el).getPropertyValue(prop).trim(); } catch (e) { got = ''; }
-      if (expected && got && got !== expected) {
+      var overridden = false;
+      Object.keys(expected).forEach(function (p) {
+        var got = '';
+        try { got = win.getComputedStyle(el).getPropertyValue(p).trim(); } catch (e) { got = ''; }
+        if (got && got !== expected[p]) { overridden = true; }
+      });
+      if (overridden) {
         el.style.setProperty(prop, rec.value, 'important');
         rec.important = true;
       } else {
@@ -1592,6 +1620,7 @@
       var out = await res.json();
       if (res.ok && out.ok) {
         a.applied = true;
+        if (hint) { hint.textContent = ''; }
         status('已写入 ' + (out.page || '') + '（备份：' + (out.backup || '—') + '），等待页面自动刷新', 'ok');
         render();
         save();
@@ -1646,6 +1675,7 @@
         try { el.remove(); } catch (e) { /* ignore */ }
         a.applied = true;
         a.deleted = true;
+        if (hint) { hint.textContent = ''; }
         status('已删除 ' + (out.page || '') + ' 中的元素（备份：' + (out.backup || '—') + '），等待刷新', 'ok');
         render();
         save();
@@ -1793,11 +1823,21 @@
       le.text = (value === '' ? null : value);
     } else if (q === 'bold' || q === 'italic' || q === 'underline') {
       var prop = q === 'bold' ? 'font-weight' : (q === 'italic' ? 'font-style' : 'text-decoration');
+      var imp = (le.style[prop] && le.style[prop].important) || false;
       if (value) {
-        var base = q === 'bold' ? 'bold' : (q === 'italic' ? 'italic' : 'underline');
-        var cur = cssValFor(a, prop);
-        // 保留已有的复合值：下划线时可能带 line-through 等
-        le.style[prop] = { value: base, important: (le.style[prop] && le.style[prop].important) || false };
+        if (q === 'underline') {
+          // 保留已有的复合值（如 line-through），只追加/去掉 underline
+          var toks = String(cssValFor(a, prop) || '').split(/\s+/).filter(Boolean);
+          var kept = toks.filter(function (t) { return t !== 'underline'; });
+          if (kept.indexOf('underline') === -1) { kept.push('underline'); }
+          le.style[prop] = { value: kept.join(' ') || 'underline', important: imp };
+        } else {
+          le.style[prop] = { value: q === 'bold' ? 'bold' : 'italic', important: imp };
+        }
+      } else if (q === 'underline') {
+        var rest = String(cssValFor(a, prop) || '').split(/\s+/).filter(function (t) { return t && t !== 'underline'; });
+        if (rest.length) { le.style[prop] = { value: rest.join(' '), important: imp }; }
+        else { delete le.style[prop]; }
       } else {
         delete le.style[prop];
       }
@@ -1815,6 +1855,9 @@
       return;
     }
 
+    // 手动改动后源文件里不再是当前状态：清掉「已写入」标记，
+    // 让导出重新带上 suggestedChanges
+    a.applied = false;
     applyLive(a);
     save();
   }
@@ -1865,7 +1908,7 @@
   var SKIP_DIRS = { '.git': 1, 'node_modules': 1, '.dom-annotator': 1, '.svn': 1, '.idea': 1, 'dist': 1, 'build': 1 };
 
   async function walkDirectory(dirHandle, prefix, out, depth) {
-    if (depth > 8) { return; }
+    if (depth > 16) { return; }
     for await (var entry of dirHandle.entries()) {
       var name = entry[0];
       var handle = entry[1];
@@ -2019,7 +2062,7 @@
       try { state.observer.disconnect(); } catch (e) { /* ignore */ }
       state.observer = null;
     }
-    if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+    if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
     if (state.reloadTimer) { clearTimeout(state.reloadTimer); state.reloadTimer = null; }
     setWatchChip('');
   }
@@ -2047,8 +2090,20 @@
       } catch (e) { /* 退回轮询 */ }
     }
 
-    state.pollTimer = setInterval(pollOnce, 1500);
+    schedulePoll();
     setWatchChip('自动刷新 · 轮询');
+  }
+
+  // 轮询模式：按单次扫描耗时自适应间隔，目录很大时不会长期占用定时器
+  function schedulePoll() {
+    state.pollTimer = setTimeout(pollTick, 1500);
+  }
+
+  async function pollTick() {
+    var t0 = performance.now();
+    await pollOnce();
+    var elapsed = performance.now() - t0;
+    state.pollTimer = setTimeout(pollTick, elapsed > 800 ? 5000 : 1500);
   }
 
   function scheduleReload(reason) {
@@ -2070,7 +2125,7 @@
       await walkDirectory(state.dirHandle, '', map, 0);
       var keys = Object.keys(map).sort();
       var parts = [];
-      for (var i = 0; i < keys.length && i < 400; i++) {
+      for (var i = 0; i < keys.length; i++) {
         try {
           var f = await map[keys[i]].getFile();
           parts.push(keys[i] + ':' + f.size + ':' + f.lastModified);
@@ -2419,8 +2474,10 @@
     if (le.attr && Object.keys(le.attr).length) { sc.attributes = le.attr; }
     if (le.text != null) { sc.innerHTML = escapeHtml(le.text); }
     if (a.liveDelete || a.deleted) { sc.delete = true; }
-    if (Object.keys(sc).length) { o.suggestedChanges = sc; }
+    // 已写进源文件的条目不再携带 suggestedChanges（避免与 appliedToSource 语义重叠）；
+    // 若之后又产生新改动（a.applied 被清除），导出会重新带上
     if (a.applied) { o.appliedToSource = true; }
+    else if (Object.keys(sc).length) { o.suggestedChanges = sc; }
 
     return o;
   }

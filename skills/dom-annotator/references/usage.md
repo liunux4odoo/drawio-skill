@@ -211,7 +211,7 @@ cat .dom-annotator/annotations.json | your-agent --stdin
 - 校验 `schemaVersion === "dom-feedback-1"`
 - 按 `annotations[].selector` 用 `document.querySelector` 定位；失败再试 `xpath`，仍失败就**报告歧义，不猜**
 - 按 `suggestedChanges` 决定改法：有 `css` → 内联样式；有 `attributes` → 属性；有 `innerHTML` → 内容；有 `delete` → 删除元素；只有 `text` → 自然语言判断
-- 有 `suggestedChanges.css` 时可直接采用
+- 有 `suggestedChanges.css` 时可直接采用；用 `el.style.setProperty(k, v, priority)` 应用，值末尾的 ` !important` 拆成 priority
 - **必须落盘改源文件**，不能只改内存
 - 应用完可选：删除或标记 `annotations.json`，避免重复应用
 
