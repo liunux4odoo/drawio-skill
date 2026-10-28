@@ -74,10 +74,6 @@
     box-shadow: 0 0 0 1px #555, 0 10px 30px rgba(0, 0, 0, .55);
   }
   #frame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
-  .vp-size {
-    font: 11px ui-monospace, Menlo, Consolas, monospace;
-    color: var(--dim); padding: 0 4px; white-space: nowrap;
-  }
   aside {
     width: 350px; flex: 0 0 350px; background: var(--panel);
     border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0;
@@ -193,14 +189,13 @@
 </head>
 <body>
 <header>
-  <button id="btn-open">加载单个 HTML</button>
   <input id="file-input" type="file" accept=".html,.htm,.xhtml,.txt,text/html" hidden>
   <button id="btn-open-dir">打开文件夹</button>
   <input id="dir-input" type="file" webkitdirectory directory multiple hidden>
   <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.6</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.7</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
   <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
@@ -213,7 +208,6 @@
     <option value="1920x1080">1920×1080 台式</option>
   </select>
   <button id="btn-mode">标注模式：关</button>
-  <span class="vp-size" id="vp-size"></span>
   <span class="spacer"></span>
   <button id="btn-export">导出 JSON</button>
   <button id="btn-copy">复制 JSON</button>
@@ -382,6 +376,11 @@
 
   function snapshot(el) {
     var rect = el.getBoundingClientRect();
+    // 视口缩放模式下 rect 是缩放后的视觉坐标，除以 zoom 还原为页面真实 CSS 坐标
+    var z = 1;
+    var zoomVal = document.documentElement && document.documentElement.style
+      ? document.documentElement.style.zoom : '';
+    if (zoomVal && parseFloat(zoomVal) > 0) { z = parseFloat(zoomVal); }
     var cs = window.getComputedStyle(el);
     var styles = {};
     for (var i = 0; i < STYLE_PROPS.length; i++) {
@@ -400,12 +399,12 @@
       srcValue: el.getAttribute('src') || '',
       hrefValue: el.getAttribute('href') || '',
       rect: {
-        x: Math.round(rect.x), y: Math.round(rect.y),
-        width: Math.round(rect.width), height: Math.round(rect.height),
-        top: Math.round(rect.top), left: Math.round(rect.left),
-        bottom: Math.round(rect.bottom), right: Math.round(rect.right),
-        pageX: Math.round(rect.left + window.scrollX),
-        pageY: Math.round(rect.top + window.scrollY)
+        x: Math.round(rect.x / z), y: Math.round(rect.y / z),
+        width: Math.round(rect.width / z), height: Math.round(rect.height / z),
+        top: Math.round(rect.top / z), left: Math.round(rect.left / z),
+        bottom: Math.round(rect.bottom / z), right: Math.round(rect.right / z),
+        pageX: Math.round((rect.left + window.scrollX) / z),
+        pageY: Math.round((rect.top + window.scrollY) / z)
       },
       computedStyle: styles,
       textSnippet: text.slice(0, 160),
@@ -536,7 +535,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.6';
+  var VERSION = '0.7';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -553,7 +552,6 @@
   var stageEl = document.getElementById('stage');
   var deviceEl = document.getElementById('device');
   var vpSelect = document.getElementById('viewport-select');
-  var vpSizeEl = document.getElementById('vp-size');
   var btnMode = document.getElementById('btn-mode');
 
   var TYPES = [
@@ -572,6 +570,7 @@
     byPage: {},
     annotations: [],
     tab: 'active',
+    zoomScale: 1,
     mode: false,
     dirFiles: null,
     entries: [],
@@ -631,25 +630,52 @@
 
   /* ---------- 渲染视口 ---------- */
 
+  // 视口缩放：仅当预设宽度超过可用空间时按宽度缩放（fit-to-width），
+  // 手机等窄视口保持真实宽度；高度超出时允许 stage 纵向滚动。
+  // 缩放模式下标注坐标导出时除以 zoom 还原。
+  function computeZoom(w, h) {
+    var availW = stageEl.clientWidth - 20;
+    var scale = availW / w;
+    return (scale >= 1) ? 1 : scale;
+  }
+
   function applyViewport(value) {
     if (!value || value === 'fit') {
       deviceEl.className = 'device fit';
       deviceEl.style.width = '';
       deviceEl.style.height = '';
-      vpSizeEl.textContent = '';
+      deviceEl.style.margin = '';
       vpSelect.value = 'fit';
+      state.zoomScale = 1;
+      applyZoomToFrame(1);
       return;
     }
     var parts = String(value).split('x');
     var w = parseInt(parts[0], 10);
     var h = parseInt(parts[1], 10);
     if (!w || !h) { return; }
+    var zoom = computeZoom(w, h);
     deviceEl.className = 'device framed';
-    deviceEl.style.width = w + 'px';
-    deviceEl.style.height = h + 'px';
-    vpSizeEl.textContent = w + '×' + h;
+    deviceEl.style.width = (w * zoom) + 'px';
+    deviceEl.style.height = (h * zoom) + 'px';
+    deviceEl.style.margin = zoom < 1 ? '10px auto' : '';
     vpSelect.value = value;
+    state.zoomScale = zoom;
     try { localStorage.setItem('dom-annotator:viewport', value); } catch (e) { /* ignore */ }
+    applyZoomToFrame(zoom);
+  }
+
+  // 把缩放应用到 iframe 内的页面（SSE 重载 / 站内跳转后要重新调用）
+  function applyZoomToFrame(zoom) {
+    var doc = null;
+    try { doc = frame.contentDocument; } catch (e) { return; }
+    if (!doc || !doc.documentElement) { return; }
+    if (state.serverMode) {
+      // 服务模式走真实 HTTP，页面有布局上下文；zoom 仍可用于渲染缩放
+      doc.documentElement.style.zoom = (zoom < 1) ? String(zoom) : '';
+    } else {
+      doc.documentElement.style.zoom = (zoom < 1) ? String(zoom) : '';
+    }
   }
 
   function currentViewportSize() {
@@ -662,7 +688,14 @@
   vpSelect.addEventListener('change', function () {
     applyViewport(vpSelect.value);
     var size = currentViewportSize();
-    status(size ? '视口已切到 ' + size.width + '×' + size.height + '（媒体查询生效，但 UA / DPR / 触控无法模拟）' : '视口已恢复自适应');
+    if (size) {
+      var z = state.zoomScale || 1;
+      status('视口已切到 ' + size.width + '×' + size.height +
+        (z < 1 ? '（已自动缩放到 ' + Math.round(z * 100) + '% 适应显示区）' : '') +
+        ' —— 媒体查询生效，UA / DPR / 触控无法模拟');
+    } else {
+      status('视口已恢复自适应');
+    }
   });
 
   /* ---------- 会话 / 多页面状态 ---------- */
@@ -844,6 +877,9 @@
 
   function removeAnnotation(id) {
     state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
+    // 删除批注后，预览页里可能还残留红色选中框，主动清除
+    var da = getDA();
+    if (da && da.clear) { try { da.clear(); } catch (e) { /* ignore */ } }
     render();
     save();
     status('已删除该批注');
@@ -893,11 +929,13 @@
     }
     base.mode = size ? 'device' : 'responsive';
     base.preset = size ? vpSelect.value : 'fit';
+    base.zoom = state.zoomScale || 1;
     return base;
   }
 
   function bootAfterLoad() {
     var injected = injectInspector();
+    applyZoomToFrame(state.zoomScale || 1);
     mountPage(state.page);
     restoreSession();
     mountPage(state.page);
@@ -1315,6 +1353,7 @@
     syncEntry(rel);
 
     injectInspector();
+    applyZoomToFrame(state.zoomScale || 1);
     mountPage(rel);
     restoreSession();
     mountPage(rel);
@@ -1957,13 +1996,14 @@
 
     if (brokenCss.length || brokenImg) {
       setNotice('[警告] 外部资源没有加载：' + brokenCss.length + ' 个样式表、' + brokenImg + ' 张图片。' +
-        '单个 HTML 文件模式无法解析相对路径——请改用「打开文件夹」（自动内联 CSS/图片/脚本），' +
+        '请改用「打开文件夹」（自动内联 CSS/图片/脚本），' +
         '或在目标目录运行 <code>python3 -m http.server 8000</code> 后用 URL 加载。');
     } else {
       setNotice('');
     }
   }
 
+  // 单文件模式入口（无顶栏按钮，保留为 FSA/服务不可用时的兜底；测试与 fallback 直接设值）
   fileInput.addEventListener('change', function () {
     var f = fileInput.files && fileInput.files[0];
     if (!f) { return; }
@@ -2038,7 +2078,6 @@
       });
   }
 
-  document.getElementById('btn-open').addEventListener('click', function () { fileInput.click(); });
   document.getElementById('btn-open-dir').addEventListener('click', function () { openFolderFsa(); });
   document.getElementById('btn-restore').addEventListener('click', function () { restoreLastFolder(); });
   document.getElementById('btn-save-disk').addEventListener('click', function () {
