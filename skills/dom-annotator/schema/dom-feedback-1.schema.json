@@ -60,6 +60,10 @@
           "type": "string",
           "description": "该批注所属页面（目录内相对路径或 URL）。多页面会话中必须以此字段决定改哪个文件；缺失时视为顶层 source。"
         },
+        "seq": {
+          "type": "number",
+          "description": "批注在所属页面内的序号（从 1 开始，按添加顺序）。标注页卡片上的 #N 即此值；用户修改意见中可用 #N 引用同一页面内的其它批注。"
+        },
         "selector": {
           "type": "string",
           "description": "CSS 选择器，优先用 id / data-testid / 唯一 class 组合，退化时带 :nth-of-type。"

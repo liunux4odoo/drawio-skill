@@ -52,13 +52,6 @@
     padding: 0 4px; font-size: 11px; color: #d7c07a;
   }
   header .spacer { flex: 1 1 auto; }
-  .status {
-    padding: 3px 12px; font-size: 12px; color: var(--dim);
-    background: #1a1a1a; border-bottom: 1px solid var(--border);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 22px;
-  }
-  .status.warn { color: #e2b93d; }
-  .status.ok { color: #6cc47a; }
   main { flex: 1 1 auto; display: flex; min-height: 0; }
   .stage {
     flex: 1 1 auto; min-width: 0; overflow: auto;
@@ -120,12 +113,12 @@
   .card.flash { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
   .card.selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
   .card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-  .idx { color: var(--acc); font-weight: 700; font-size: 12px; }
+  .idx { color: var(--acc); font-weight: 700; font-size: 12px; flex: 0 0 auto; }
   .tag {
     font-size: 11px; color: #4ec9b0; background: #1e1e1e;
     border: 1px solid var(--border); border-radius: 3px; padding: 0 5px;
   }
-  .card-head .actions { margin-left: auto; display: flex; gap: 4px; }
+  .card-head .actions { margin-left: auto; display: flex; gap: 4px; flex: 0 0 auto; }
   .card-head button {
     background: transparent; color: var(--dim); border: 1px solid var(--border);
     border-radius: 3px; font-size: 11px; padding: 0 6px; cursor: pointer; font-family: inherit;
@@ -133,7 +126,8 @@
   .card-head button:hover { color: var(--fg); border-color: var(--acc); }
   .sel {
     font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #9cdcfe;
-    word-break: break-all; margin-bottom: 6px; cursor: pointer;
+    word-break: break-all; cursor: pointer; flex: 1 1 auto; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sel:hover { text-decoration: underline; }
   textarea {
@@ -200,16 +194,6 @@
   .mp-sel { font-weight: 400; font-size: 11px; color: var(--dim); margin-left: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
   .mp-body { display: flex; flex-direction: column; gap: 5px; }
   .mp-body .qrow label { min-width: 30px; }
-  .mp-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
-  .mp-item {
-    font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #9cdcfe;
-    background: #1e1e1e; border: 1px solid var(--border); border-radius: 3px;
-    padding: 4px 6px; cursor: pointer; word-break: break-all;
-  }
-  .mp-item:hover { border-color: var(--acc); }
-  .mp-item.selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); color: #fff; }
-  .mp-item .mp-item-tag { color: #4ec9b0; margin-right: 4px; }
-  .mp-item.stale { color: #e2b93d; text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -220,7 +204,7 @@
   <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.11</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.13</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
   <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
@@ -238,7 +222,6 @@
   <button id="btn-copy">复制 JSON</button>
   <button id="btn-copy-md">复制 Markdown</button>
 </header>
-<div id="status" class="status">就绪</div>
 <div id="notice" class="notice"></div>
 <main>
   <div class="stage" id="stage">
@@ -568,7 +551,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.11';
+  var VERSION = '0.13';
 
   // 防御：annotator 页面不应被嵌套在 iframe 里（正常使用它自己是顶层窗口）。
   // 不带参数运行 serve.py 且目标目录恰好含 annotator.html 时，iframe 可能加载到它自己，
@@ -591,7 +574,6 @@
   var totalEl = document.getElementById('total');
   var pagesEl = document.getElementById('pages');
   var pageNameEl = document.getElementById('page-name');
-  var statusEl = document.getElementById('status');
   var urlInput = document.getElementById('url-input');
   var fileInput = document.getElementById('file-input');
   var dirInput = document.getElementById('dir-input');
@@ -645,8 +627,10 @@
   }
 
   function status(msg, kind) {
-    statusEl.textContent = msg;
-    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+    // 状态提示栏已移除（信息在侧边栏/卡片有展示）；保留 warn 级反馈走 notice 黄色提示条
+    if (kind === 'warn') {
+      setNotice(escapeHtml(msg));
+    }
   }
 
   function getDA() {
@@ -795,19 +779,12 @@
     var statusTabs = document.getElementById('status-tabs');
 
     if (state.panelMode === 'manual') {
-      // 手动模式：批注选择列表 + 手动修改面板
+      // 手动模式：只针对当前选中的元素显示修改面板（无列表）
       statusTabs.style.display = 'none';
+      listEl.style.display = 'none';
+      panel.style.flex = '1 1 auto';
+      panel.style.maxHeight = 'none';
       countEl.textContent = String(state.annotations.length);
-      if (!state.annotations.length) {
-        listEl.innerHTML = '<div class="empty">还没有批注。先在右侧页面标注元素，再回到这里手动修改。</div>';
-      } else {
-        listEl.innerHTML = state.annotations.map(function (a, i) {
-          return '<div class="mp-item' + (a.stale ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-mpid="' + a.id + '">' +
-            '<span class="mp-item-tag">#' + (i + 1) + ' &lt;' + escapeHtml(a.tagName || '?') + '&gt;</span>' +
-            escapeHtml(a.selector || '') +
-          '</div>';
-        }).join('');
-      }
       panel.hidden = false;
       renderManualPanel();
       return;
@@ -816,6 +793,9 @@
     // AI 模式：批注卡片列表（含意见框）
     statusTabs.style.display = '';
     panel.hidden = true;
+    listEl.style.display = '';
+    panel.style.flex = '';
+    panel.style.maxHeight = '';
 
     var visible = state.annotations.filter(function (a) {
       return state.tab === 'stale' ? !!a.stale : !a.stale;
@@ -833,21 +813,20 @@
       return;
     }
 
-    var html = visible.map(function (a, i) {
+    var html = visible.map(function (a) {
       return '' +
         '<div class="card' + (a.stale ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-id="' + a.id + '">' +
           '<div class="card-head">' +
-            '<span class="idx">#' + (i + 1) + '</span>' +
-            '<span class="tag">' + escapeHtml(a.tagName || '?') + '</span>' +
+            '<span class="idx">#' + (state.annotations.indexOf(a) + 1) + '</span>' +
+            '<span class="sel" data-act="focus" data-id="' + a.id + '" title="' + escapeHtml(a.xpath || '') + '">' +
+              escapeHtml(a.selector || '') +
+            '</span>' +
             (a.stale ? '<span class="stale-tag" title="页面重载后该选择器匹配不到元素，或匹配到的元素与记录不一致">已失效</span>' : '') +
             (a.deleted ? '<span class="stale-tag" title="该元素已从源文件删除">已删除</span>' : '') +
             '<span class="actions">' +
               '<button data-act="focus" data-id="' + a.id + '">定位</button>' +
               '<button data-act="del" data-id="' + a.id + '" title="删除该批注">删</button>' +
             '</span>' +
-          '</div>' +
-          '<div class="sel" data-act="focus" data-id="' + a.id + '" title="' + escapeHtml(a.xpath || '') + '">' +
-            escapeHtml(a.selector || '') +
           '</div>' +
           '<textarea data-act="text" data-id="' + a.id + '" placeholder="AI 修改：写清要改什么，例如：改为圆角 8px，背景色 #2b579a">' +
             escapeHtml(a.text || '') +
@@ -889,11 +868,13 @@
       existing.computedStyle = p.computedStyle;
       existing.textSnippet = p.textSnippet;
       existing.htmlSnippet = p.htmlSnippet;
-      status('已更新已有批注：' + p.selector);
       flashCard(existing.id);
+      // 手动模式下点击页面元素后直接选中该批注，面板立即显示，无需再点列表项
+      state.selectedId = existing.id;
     } else {
+      var aid = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       state.annotations.push({
-        id: 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        id: aid,
         selector: p.selector,
         xpath: p.xpath,
         tagName: p.tagName,
@@ -909,7 +890,8 @@
         suggestedChanges: {},
         liveEdits: { style: {}, attr: {}, text: null }
       });
-      status('已添加批注：' + p.selector);
+      // 手动模式下点击页面元素后直接选中新批注，面板立即显示
+      state.selectedId = aid;
     }
 
     render();
@@ -984,19 +966,8 @@
 
     render();
 
-    var here = state.annotations.length;
-    var total = totalAnnotations();
-    var pages = annotatedPages().length;
-
-    var summary = '已加载 ' + state.source;
-    if (total) {
-      summary += '（本页 ' + here + ' 条 · 共 ' + total + ' 条 / ' + pages + ' 页）';
-    }
-    summary += ' —— 按住 Ctrl/⌘ 点击元素开始标注';
-
-    if (injected) {
-      status(summary, 'ok');
-    } else {
+    // 状态提示栏已移除：加载成功信息在侧边栏有展示（本页 N 条 · 共 M 条 / K 页）
+    if (!injected) {
       status('页面已加载，但无法注入检查器（可能是跨域页面）。建议用本地 HTTP 服务加载', 'warn');
     }
   }
@@ -1254,7 +1225,6 @@
     }
 
     setNotice('');
-    status('正在内联本地资源：' + entryPath + ' …');
 
     buildHtmlFromDir(entryPath).then(function (res) {
       return setFrameHtml(res.html).then(function () {
@@ -1263,8 +1233,6 @@
         var uniq = uniqueList(res.unresolved);
         if (uniq.length) {
           status('已加载 ' + entryPath + '（' + uniq.length + ' 个引用未找到，前几个：' + uniq.slice(0, 3).join('、') + '）', 'warn');
-        } else {
-          status('已加载 ' + entryPath + ' —— 本地样式 / 图片 / 脚本已内联，按住 Ctrl/⌘ 点击元素开始标注', 'ok');
         }
       });
     }).catch(function (err) {
@@ -1405,9 +1373,6 @@
     markStale();
     state.busy = false;
 
-    var here = state.annotations.length;
-    status('服务模式：' + rel + (here ? '（本页 ' + here + ' 条 · 共 ' + totalAnnotations() + ' 条）' : '') +
-      ' —— 磁盘改动自动刷新，按住 Ctrl/⌘ 点击元素标注', 'ok');
   }
 
   async function loadImageList() {
@@ -1598,24 +1563,24 @@
   }
 
   async function writeSource(a) {
-    if (!a) { return; }
+    if (!a) { return false; }
     if (!state.serverMode) {
       status('只有「服务模式」能直接写入源文件；当前改动会作为建议随标注导出', 'warn');
-      return;
+      return false;
     }
     if (!state.serverWritable) {
       status('服务以 --write-mode=suggest 启动，未开启写入', 'warn');
-      return;
+      return false;
     }
     var el = findElement(a);
     if (!el) {
       status('页面上找不到该元素，无法写入', 'warn');
-      return;
+      return false;
     }
     var edits = editsFrom(a);
     if (!edits.length) {
       status('还没有改动可写入', 'warn');
-      return;
+      return false;
     }
 
     var da = getDA();
@@ -1638,17 +1603,21 @@
       if (res.ok && out.ok) {
         a.applied = true;
         if (hint) { hint.textContent = ''; }
-        status('已写入 ' + (out.page || '') + '（备份：' + (out.backup || '—') + '），等待页面自动刷新', 'ok');
+        status('已写入 ' + (out.page || '') + '（备份：' + (out.backup || '—') + '），马上刷新预览', 'ok');
+        // 写盘后主动刷新预览（不等 SSE 广播，保证「马上」回传刷新）
+        scheduleServerReload('已写入源文件');
         render();
         save();
-        return;
+        return true;
       }
       var reason = (out && (out.reason || out.error)) || ('HTTP ' + res.status);
       if (hint) { hint.textContent = '未写入：' + reason; }
       status('未能写入源文件（' + reason + '）——改动已保留为建议，agent 会按建议改', 'warn');
       save();
+      return false;
     } catch (e) {
       status('写入请求失败：' + ((e && e.message) || e), 'warn');
+      return false;
     }
   }
 
@@ -1790,10 +1759,9 @@
     }
 
     html += '<div class="qrow">' +
-      '<button data-act="write-src" data-id="' + a.id + '"' +
-      (canWrite ? '' : ' disabled title="只有服务模式可写源文件"') + '>写入源文件</button>' +
       '<button class="del" data-act="delete-el" data-id="' + a.id + '"' +
       (canWrite ? '' : ' disabled title="只有服务模式可写源文件"') + '>删除元素</button>' +
+      '<span class="qhint">改动写回源文件请用下方「保存到项目」按钮</span>' +
       (a.deleted ? '<span class="qhint">[已删除]</span>' : (a.applied ? '<span class="qhint">[已写入]</span>' : '')) +
       '<span class="qhint" data-for="' + a.id + '"></span>' +
       '</div>';
@@ -1806,12 +1774,13 @@
     var body = document.getElementById('mp-body');
     var selEl = document.getElementById('mp-sel');
     var a = state.selectedId ? findAnn(state.selectedId) : null;
+    panel.hidden = false;
     if (!a) {
-      panel.hidden = true;
+      selEl.textContent = '';
+      body.innerHTML = '<div class="empty">还没有选中元素。<br>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击右侧页面中的元素，或打开「标注模式」后直接点击，即可在这里手动修改。</div>';
       return;
     }
-    panel.hidden = false;
-    selEl.textContent = '#' + a.selector;
+    selEl.textContent = '#' + (state.annotations.indexOf(a) + 1) + ' <' + escapeHtml(a.tagName || '?') + '>';
     body.innerHTML = manualPanel(a);
   }
 
@@ -2291,8 +2260,22 @@
 
   document.getElementById('btn-open-dir').addEventListener('click', function () { openFolderFsa(); });
   document.getElementById('btn-restore').addEventListener('click', function () { restoreLastFolder(); });
-  document.getElementById('btn-save-disk').addEventListener('click', function () {
+  // 「保存到项目」= 写源文件（若当前选中批注有可写改动）+ 保存 annotations.json
+  async function saveAll() {
+    var a = state.selectedId ? findAnn(state.selectedId) : null;
+    var canWrite = state.serverMode && state.serverWritable;
+    if (a && canWrite && !a.deleted && !a.applied && editsFrom(a).length) {
+      var ok = await writeSource(a);
+      if (!ok) { return; } // 写源文件失败：不继续保存 JSON，保留现场
+    } else if (a && !canWrite && !a.deleted && !a.applied && editsFrom(a).length) {
+      // 非服务模式：提示改动会随标注导出
+      status('当前不是服务模式，改动不能直接写源文件；会随「导出 JSON」作为建议交给 agent', 'warn');
+    }
     if (state.serverMode) { saveToServer(); } else { saveToDisk(); }
+  }
+
+  document.getElementById('btn-save-disk').addEventListener('click', function () {
+    saveAll();
   });
   dirInput.addEventListener('change', function () {
     handleDirFiles(dirInput.files);
@@ -2314,7 +2297,6 @@
     if (da) {
       try { da.setMode(state.mode); } catch (e) { /* ignore */ }
     }
-    status(state.mode ? '标注模式已开启：直接点击元素即可选中（Esc 取消悬停）' : '标注模式已关闭：按住 Ctrl/⌘ 点击元素');
   });
 
   /* ---------- 列表交互 ---------- */
@@ -2368,26 +2350,11 @@
         return;
       }
 
-      if (act === 'write-src') {
-        writeSource(findAnn(id));
-        return;
-      }
-
       if (act === 'delete-el') {
         deleteElement(findAnn(id));
         return;
       }
 
-      return;
-    }
-
-    // 手动模式的批注选择项
-    var mpItem = e.target.closest('[data-mpid]');
-    if (mpItem) {
-      var mid = mpItem.getAttribute('data-mpid');
-      state.selectedId = (state.selectedId === mid) ? null : mid;
-      render();
-      renderManualPanel();
       return;
     }
 
@@ -2442,7 +2409,6 @@
     if (!el) { return; }
     var act = el.getAttribute('data-act');
     var id = el.getAttribute('data-id');
-    if (act === 'write-src') { writeSource(findAnn(id)); return; }
     if (act === 'delete-el') { deleteElement(findAnn(id)); return; }
   });
 
@@ -2465,10 +2431,11 @@
 
   /* ---------- 导出 ---------- */
 
-  function annotationOut(a, page) {
+  function annotationOut(a, page, seq) {
     var o = {
       id: a.id,
       page: page,
+      seq: seq,
       selector: a.selector,
       xpath: a.xpath,
       tagName: a.tagName,
@@ -2504,7 +2471,7 @@
     var pages = annotatedPages();
     var all = [];
     pages.forEach(function (p) {
-      state.byPage[p].forEach(function (a) { all.push(annotationOut(a, p)); });
+      state.byPage[p].forEach(function (a, i) { all.push(annotationOut(a, p, i + 1)); });
     });
     return {
       schemaVersion: 'dom-feedback-1',
@@ -2566,7 +2533,6 @@
   function toMarkdown() {
     var fb = buildFeedback();
     var lines = [];
-    var idx = 0;
 
     lines.push('## DOM 标注反馈');
     lines.push('');
@@ -2587,8 +2553,7 @@
       }
 
       items.forEach(function (a) {
-        idx += 1;
-        lines.push('#### ' + idx + '. `' + a.selector + '`');
+        lines.push('#### #' + (a.seq || '?') + ' `' + a.selector + '`');
         lines.push('');
         lines.push('- 目标文件：`' + p + '`');
         lines.push('- 元素：`<' + a.tagName + '>`' + (a.textSnippet ? ' 文本：「' + a.textSnippet + '」' : ''));

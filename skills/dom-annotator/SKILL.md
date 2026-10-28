@@ -28,11 +28,11 @@ python3 <skill-dir>/scripts/serve.py --dir <目标目录> [--entry index.html]
 侧栏顶部有「AI 模式 | 手动模式」两个独立 tab，用哪套工具自由切换：
 
 - **AI 模式**：每张卡片上的意见框，写自然语言需求（如「改为圆角 8px，背景色 #2b579a」），导出为 `text`；保留「有效 / 已失效」过滤
-- **手动模式**：批注选择列表 + 手动修改面板。选中列表项后参数自动更新。结构化控件：文字色 / 背景色 / 字号（同一行）、加粗 / 斜体 / 下划线 / 对齐、圆角 / 内边距 / 宽高、文本、图片 src，以及「写入源文件」「删除元素」按钮
+- **手动模式**：无列表，直接针对**当前选中批注**（在页面点元素即选中）显示结构化修改面板。控件：文字色 / 背景色 / 字号（同一行）、加粗 / 斜体 / 下划线 / 对齐、圆角 / 内边距 / 宽高、文本、图片 src，以及「删除元素」按钮
 
 - 改动**立刻在预览生效**（不必等 agent）
-- 点「写入源文件」→ `serve.py` 按字符区间改写 HTML：**只替换目标字节，其余零改动**
-- 写前自动备份到 `<项目>/.dom-annotator/backup/`，写后 SSE 触发重载，看到的是源文件真实结果
+- 点「💾 保存到项目」→ 有可写改动时先写源文件，再保存 `annotations.json`；写源文件由 `serve.py` 按字符区间改写 HTML：**只替换目标字节，其余零改动**
+- 写前自动备份到 `<项目>/.dom-annotator/backup/`，写后立即刷新，看到的是源文件真实结果
 - 被更高优先级 CSS 压制时自动升级 `!important`
 
 **agent 侧必读**：
@@ -77,11 +77,18 @@ cat .dom-annotator/annotations.json
 - 若 `annotations[].computedStyle` 与源文件里的声明不一致：以 `computedStyle` 为「当时的真实渲染值」参考，改动仍落在源文件的 CSS/内联样式上
 
 ### 3. 逐条处理批注
+
+> **#N 引用约定**：标注页卡片上的 `#N`（N 为页面内序号，从 1 开始）与 JSON 的 `seq` 一一对应。
+> 用户修改意见里出现 `#N` 时，表示引用**同一页面**内的第 N 条批注（例如「把 #1 的圆角改成和 #3 一致」）。
+> 处理时先解析 `#N` → 找到 `page` 相同且 `seq === N` 的条目，再读取该条目的 selector/值；
+> 跨页面引用一律以「页面名 + #N」为准（如「documents.html 的 #2」）。
+
 每个 `annotations[]` 包含：
 ```typescript
 {
   id: string,                    // 唯一标识
   page: string,                  // 所属页面（目录内相对路径或 URL）；多页面时按此分组
+  seq: number,                   // 页面内序号（从 1 开始）；用户意见里的 #N 即此值
   selector: string,              // CSS Selector（优先定位）
   xpath?: string,                // 备用 XPath
   rect: DOMRect,                 // 当时可视区域 {x,y,width,height,top,left,bottom,right,pageX,pageY}
