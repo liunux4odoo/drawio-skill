@@ -23,9 +23,12 @@ python3 <skill-dir>/scripts/serve.py --dir <目标目录> [--entry index.html]
 `nohup python3 ... > /tmp/dom-annotator.log 2>&1 &`），把 URL 告诉用户；
 任务结束或用户要求关闭时 kill 该进程。加 `--no-open` 则只起服务、不开浏览器。
 
-## 快速修改：页面可直接改写源文件（服务模式）
+## 页面直接修改：AI 修改 + 手动修改（服务模式）
 
-选中元素后侧栏有「快速修改」面板：文字色 / 背景色 / 字号 / 圆角 / 内边距 / 宽高 / 文本 / 图片 src / 显隐。
+侧栏卡片分两种修改入口：
+
+- **AI 修改**：每张卡片上的意见框，写自然语言需求（如「改为圆角 8px，背景色 #2b579a」），导出为 `text`
+- **手动修改**：侧栏底部**唯一一个**面板，点击卡片选中批注后自动更新。结构化控件：文字色 / 背景色 / 字号（同一行）、加粗 / 斜体 / 下划线 / 对齐、圆角 / 内边距 / 宽高、文本、图片 src，以及「写入源文件」「删除元素」按钮
 
 - 改动**立刻在预览生效**（不必等 agent）
 - 点「写入源文件」→ `serve.py` 按字符区间改写 HTML：**只替换目标字节，其余零改动**
@@ -78,30 +81,30 @@ cat .dom-annotator/annotations.json
 ```typescript
 {
   id: string,                    // 唯一标识
-  type: "style" | "layout" | "content" | "attr" | "global",
   page: string,                  // 所属页面（目录内相对路径或 URL）；多页面时按此分组
   selector: string,              // CSS Selector（优先定位）
   xpath?: string,                // 备用 XPath
   rect: DOMRect,                 // 当时可视区域 {x,y,width,height,top,left,bottom,right}
   computedStyle?: CSSStyleDeclaration,  // 关键样式快照
-  text: string,                  // 用户修改意见
-  suggestedChanges?: {           // 可选：AI 可直接用的建议
+  text: string,                  // 用户修改意见（AI 修改框内容）
+  suggestedChanges?: {           // 可选：手动修改面板生成的结构化建议
     css?: Record<string, string>,
     attributes?: Record<string, string>,
-    innerHTML?: string
+    innerHTML?: string,
+    delete?: boolean
   }
 }
 ```
 
-**处理策略**：
+**处理策略**（按 `suggestedChanges` 内容，不依赖 type）：
 
-| type | 定位方式 | 修改动作 |
+| 字段 | 定位方式 | 修改动作 |
 |------|----------|----------|
-| `style` | `document.querySelector(selector)` | `Object.assign(el.style, suggestedChanges.css)` |
-| `attr` | 同上 | `Object.entries(suggestedChanges.attributes).forEach(([k,v]) => el.setAttribute(k,v))` |
-| `content` | 同上 | `el.innerHTML = suggestedChanges.innerHTML` |
-| `layout` | 同上 | 修改父级 flex/grid 或自身 margin/position/display |
-| `global` | 无需定位 | 全局建议（配色、字体等），需人工决策 |
+| `suggestedChanges.css` | `document.querySelector(selector)` | 逐条 `Object.assign(el.style, suggestedChanges.css)` |
+| `suggestedChanges.attributes` | 同上 | `Object.entries(...).forEach(([k,v]) => el.setAttribute(k,v))` |
+| `suggestedChanges.innerHTML` | 同上 | `el.innerHTML = suggestedChanges.innerHTML` |
+| `suggestedChanges.delete` | 同上 | 删除整个元素（含子内容） |
+| 只有 `text` 意见 | 同上 | 结合自然语言需求判断改法 |
 
 **定位失败时**：
 1. 尝试 `xpath`（需 xpath 库）

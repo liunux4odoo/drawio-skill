@@ -108,6 +108,7 @@
     border-radius: 4px; padding: 8px; margin-bottom: 8px;
   }
   .card.flash { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+  .card.selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
   .card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
   .idx { color: var(--acc); font-weight: 700; font-size: 12px; }
   .tag {
@@ -125,12 +126,6 @@
     word-break: break-all; margin-bottom: 6px; cursor: pointer;
   }
   .sel:hover { text-decoration: underline; }
-  .types { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
-  .types button {
-    background: #333; color: var(--dim); border: 1px solid var(--border);
-    border-radius: 3px; font-size: 11px; padding: 1px 7px; cursor: pointer; font-family: inherit;
-  }
-  .types button.active { background: var(--acc); border-color: var(--acc); color: #fff; }
   textarea {
     width: 100%; background: #1e1e1e; color: var(--fg);
     border: 1px solid var(--border); border-radius: 3px;
@@ -187,6 +182,14 @@
   .qrow button.del { background: #4a2a2a; border-color: #6a3a3a; color: #f3d9d9; }
   .qrow button.del:hover { background: #5d3333; border-color: #a05; color: #fff; }
   .qhint { font-size: 10px; color: var(--dim); }
+  .manual-panel {
+    border-top: 2px solid var(--acc); background: var(--panel2);
+    padding: 8px; max-height: 46vh; overflow: auto; flex: 0 0 auto;
+  }
+  .mp-head { font-size: 12px; font-weight: 700; color: var(--acc); margin-bottom: 6px; }
+  .mp-sel { font-weight: 400; font-size: 11px; color: var(--dim); margin-left: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .mp-body { display: flex; flex-direction: column; gap: 5px; }
+  .mp-body .qrow label { min-width: 30px; }
 </style>
 </head>
 <body>
@@ -231,6 +234,10 @@
       本页 <span id="count">0</span> 条 · 共 <span id="total">0</span> 条 / <span id="pages">0</span> 页
     </div>
     <div id="list" class="list"></div>
+    <div id="manual-panel" class="manual-panel" hidden>
+      <div class="mp-head">手动修改<span class="mp-sel" id="mp-sel"></span></div>
+      <div class="mp-body" id="mp-body"></div>
+    </div>
     <div class="aside-foot">
       <button id="btn-save-disk" title="直接写入所选目录的 .dom-annotator/annotations.json">保存到项目</button>
       <button id="btn-clear">清空全部</button>
@@ -537,7 +544,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.8';
+  var VERSION = '0.9';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -556,14 +563,6 @@
   var vpSelect = document.getElementById('viewport-select');
   var btnMode = document.getElementById('btn-mode');
 
-  var TYPES = [
-    ['style', '样式'],
-    ['layout', '布局'],
-    ['content', '内容'],
-    ['attr', '属性'],
-    ['global', '全局']
-  ];
-
   var state = {
     source: '',
     sourceType: '',
@@ -572,6 +571,7 @@
     byPage: {},
     annotations: [],
     tab: 'active',
+    selectedId: null,
     zoomScale: 1,
     mode: false,
     dirFiles: null,
@@ -614,20 +614,6 @@
       var w = frame.contentWindow;
       return w && w.__DA__ ? w.__DA__ : null;
     } catch (e) { return null; }
-  }
-
-  function parseCss(text) {
-    var out = {};
-    String(text || '').split(/\r?\n/).forEach(function (line) {
-      var m = line.match(/^\s*([A-Za-z-]+)\s*[:：]\s*(.+?)\s*;?\s*$/);
-      if (m) { out[m[1]] = m[2]; }
-    });
-    return out;
-  }
-
-  function cssToText(css) {
-    if (!css) { return ''; }
-    return Object.keys(css).map(function (k) { return k + ': ' + css[k]; }).join('\n');
   }
 
   /* ---------- 渲染视口 ---------- */
@@ -782,17 +768,13 @@
     }
 
     var html = visible.map(function (a, i) {
-      var typeBtns = TYPES.map(function (t) {
-        return '<button data-act="type" data-id="' + a.id + '" data-type="' + t[0] + '"' +
-          (a.type === t[0] ? ' class="active"' : '') + '>' + t[1] + '</button>';
-      }).join('');
-
       return '' +
-        '<div class="card' + (a.stale ? ' stale' : '') + '" data-id="' + a.id + '">' +
+        '<div class="card' + (a.stale ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-id="' + a.id + '">' +
           '<div class="card-head">' +
             '<span class="idx">#' + (i + 1) + '</span>' +
             '<span class="tag">' + escapeHtml(a.tagName || '?') + '</span>' +
             (a.stale ? '<span class="stale-tag" title="页面重载后该选择器匹配不到元素，或匹配到的元素与记录不一致">已失效</span>' : '') +
+            (a.deleted ? '<span class="stale-tag" title="该元素已从源文件删除">已删除</span>' : '') +
             '<span class="actions">' +
               '<button data-act="focus" data-id="' + a.id + '">定位</button>' +
               '<button data-act="del" data-id="' + a.id + '" title="删除该批注">删</button>' +
@@ -801,21 +783,14 @@
           '<div class="sel" data-act="focus" data-id="' + a.id + '" title="' + escapeHtml(a.xpath || '') + '">' +
             escapeHtml(a.selector || '') +
           '</div>' +
-          '<div class="types">' + typeBtns + '</div>' +
-          '<textarea data-act="text" data-id="' + a.id + '" placeholder="写清要改什么，例如：改为圆角 8px，背景色 #2b579a">' +
+          '<textarea data-act="text" data-id="' + a.id + '" placeholder="AI 修改：写清要改什么，例如：改为圆角 8px，背景色 #2b579a">' +
             escapeHtml(a.text || '') +
           '</textarea>' +
-          '<details' + (a.suggestedChanges && a.suggestedChanges.css ? ' open' : '') + '>' +
-            '<summary>CSS 建议（可选，每行 property: value）</summary>' +
-            '<textarea data-act="css" data-id="' + a.id + '" placeholder="border-radius: 8px&#10;background-color: #2b579a">' +
-              escapeHtml(cssToText(a.suggestedChanges && a.suggestedChanges.css)) +
-            '</textarea>' +
-          '</details>' +
-          quickPanel(a) +
         '</div>';
     }).join('');
 
     listEl.innerHTML = html;
+    renderManualPanel();
   }
 
   function findAnn(id) {
@@ -854,7 +829,6 @@
     } else {
       state.annotations.push({
         id: 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        type: 'global',
         selector: p.selector,
         xpath: p.xpath,
         tagName: p.tagName,
@@ -879,6 +853,7 @@
 
   function removeAnnotation(id) {
     state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
+    if (state.selectedId === id) { state.selectedId = null; }
     // 删除批注后，预览页里可能还残留红色选中框，主动清除
     var da = getDA();
     if (da && da.clear) { try { da.clear(); } catch (e) { /* ignore */ } }
@@ -1651,7 +1626,8 @@
     }).join('');
   }
 
-  function quickPanel(a) {
+  function manualPanel(a) {
+    if (!a) { return ''; }
     var le = a.liveEdits || { style: {}, attr: {}, text: null };
     var st = le.style || {};
     var cssVal = function (p) {
@@ -1662,29 +1638,46 @@
     var canWrite = state.serverMode && state.serverWritable;
     var textDisabled = (a.childCount || 0) > 0;
 
-    var hasEdits = Object.keys(st).length || Object.keys(le.attr || {}).length || le.text != null;
+    // 布尔属性：有显式 liveEdits 用 liveEdits，否则回退计算样式判断
+    var boolVal = function (p, truthy) {
+      if (st[p]) { return String(st[p].value).indexOf(truthy) !== -1; }
+      return String(cssVal(p)).indexOf(truthy) !== -1;
+    };
+    var bold = boolVal('font-weight', 'bold') || numOf(cssVal('font-weight')) >= 700;
+    var italic = boolVal('font-style', 'italic');
+    var underline = boolVal('text-decoration', 'underline');
+    var align = cssVal('text-align') || 'left';
 
-    var html = '<details class="quick"' + (hasEdits ? ' open' : '') + '>' +
-      '<summary>快速修改' + (canWrite ? '（可写入源文件）' : '（仅预览）') + '</summary>' +
-      '<div class="qf">';
-
-    html += '<div class="qrow"><label>文字色</label>' +
+    var html = '<div class="qrow"><label>文字色</label>' +
       '<input type="color" data-q="color" data-id="' + a.id + '" value="' + toHexColor(cssVal('color')) + '">' +
       '<input class="hex" type="text" data-q="color-hex" data-id="' + a.id + '" value="' +
-      toHexColor(cssVal('color')) + '" placeholder="#rrggbb"></div>';
-
-    html += '<div class="qrow"><label>背景</label>' +
+      toHexColor(cssVal('color')) + '" placeholder="#rrggbb">' +
+      '<label>背景</label>' +
       '<input type="color" data-q="background-color" data-id="' + a.id + '" value="' +
-      toHexColor(cssVal('background-color')) + '"></div>';
-
-    html += '<div class="qrow"><label>字号</label>' +
+      toHexColor(cssVal('background-color')) + '">' +
+      '<label>字号</label>' +
       '<input type="number" data-q="font-size" data-id="' + a.id + '" value="' + px('font-size') + '" min="1">' +
-      '<span class="unit">px</span>' +
-      '<label>圆角</label>' +
-      '<input type="number" data-q="border-radius" data-id="' + a.id + '" value="' + px('border-radius') + '" min="0">' +
       '<span class="unit">px</span></div>';
 
-    html += '<div class="qrow"><label>内边距</label>' +
+    html += '<div class="qrow"><label>加粗</label>' +
+      '<input type="checkbox" data-q="bold" data-id="' + a.id + '"' + (bold ? ' checked' : '') + '>' +
+      '<label>斜体</label>' +
+      '<input type="checkbox" data-q="italic" data-id="' + a.id + '"' + (italic ? ' checked' : '') + '>' +
+      '<label>下划线</label>' +
+      '<input type="checkbox" data-q="underline" data-id="' + a.id + '"' + (underline ? ' checked' : '') + '>' +
+      '<label>对齐</label>' +
+      '<select data-q="text-align" data-id="' + a.id + '">' +
+        '<option value="">默认</option>' +
+        '<option value="left"' + (align === 'left' ? ' selected' : '') + '>左</option>' +
+        '<option value="center"' + (align === 'center' ? ' selected' : '') + '>中</option>' +
+        '<option value="right"' + (align === 'right' ? ' selected' : '') + '>右</option>' +
+        '<option value="justify"' + (align === 'justify' ? ' selected' : '') + '>两端</option>' +
+      '</select></div>';
+
+    html += '<div class="qrow"><label>圆角</label>' +
+      '<input type="number" data-q="border-radius" data-id="' + a.id + '" value="' + px('border-radius') + '" min="0">' +
+      '<span class="unit">px</span>' +
+      '<label>内边距</label>' +
       '<input type="number" data-q="padding" data-id="' + a.id + '" value="' + px('padding') + '" min="0">' +
       '<span class="unit">px</span>' +
       '<label>宽</label><input type="number" data-q="width" data-id="' + a.id + '" value="' + px('width') + '">' +
@@ -1710,28 +1703,59 @@
       '<span class="qhint" data-for="' + a.id + '"></span>' +
       '</div>';
 
-    html += '</div></details>';
     return html;
   }
 
-  function handleQuickInput(a, q, value) {
+  function renderManualPanel() {
+    var panel = document.getElementById('manual-panel');
+    var body = document.getElementById('mp-body');
+    var selEl = document.getElementById('mp-sel');
+    var a = state.selectedId ? findAnn(state.selectedId) : null;
+    if (!a) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    selEl.textContent = '#' + a.selector;
+    body.innerHTML = manualPanel(a);
+  }
+
+  function syncManualColor(q, value, card) {
+    var picker = card.querySelector('[data-q="' + q + '"]');
+    var hex = card.querySelector('[data-q="' + (q === 'color' ? 'color-hex' : 'color') + '"]');
+    if (q === 'color' && hex) { hex.value = value; }
+    if (q === 'color-hex' && picker) { picker.value = value; }
+  }
+
+  function handleManualInput(a, q, value) {
     var le = ensureLive(a);
     var card = listEl.querySelector('.card[data-id="' + a.id + '"]');
+    var body = document.getElementById('mp-body');
+    var inPanel = body.querySelector('[data-q="' + q + '"]');
 
     if (q === 'color' || q === 'color-hex') {
       var v = String(value).trim();
       if (q === 'color-hex' && !/^#[0-9a-f]{6}$/i.test(v)) { return; }
       le.style.color = { value: v, important: (le.style.color && le.style.color.important) || false };
-      if (card) {
-        var picker = card.querySelector('[data-q="color"]');
-        var hex = card.querySelector('[data-q="color-hex"]');
-        if (q === 'color' && hex) { hex.value = v; }
-        if (q === 'color-hex' && picker) { picker.value = v; }
-      }
+      if (inPanel) { syncManualColor(q, v, body); }
+      if (card) { syncManualColor(q, v, card); }
     } else if (q === 'src') {
       if (value) { le.attr.src = value; } else { delete le.attr.src; }
     } else if (q === 'text') {
       le.text = (value === '' ? null : value);
+    } else if (q === 'bold' || q === 'italic' || q === 'underline') {
+      var prop = q === 'bold' ? 'font-weight' : (q === 'italic' ? 'font-style' : 'text-decoration');
+      if (value) {
+        var base = q === 'bold' ? 'bold' : (q === 'italic' ? 'italic' : 'underline');
+        var cur = cssValFor(a, prop);
+        // 保留已有的复合值：下划线时可能带 line-through 等
+        le.style[prop] = { value: base, important: (le.style[prop] && le.style[prop].important) || false };
+      } else {
+        delete le.style[prop];
+      }
+    } else if (q === 'text-align') {
+      if (value === '') { delete le.style['text-align']; }
+      else { le.style['text-align'] = { value: value, important: (le.style['text-align'] && le.style['text-align'].important) || false }; }
     } else if (QUICK_PROPS.indexOf(q) !== -1) {
       if (value === '') {
         delete le.style[q];
@@ -1745,6 +1769,13 @@
 
     applyLive(a);
     save();
+  }
+
+  function cssValFor(a, prop) {
+    var le = a.liveEdits || {};
+    var st = le.style || {};
+    if (st[prop]) { return String(st[prop].value); }
+    return (a.computedStyle && a.computedStyle[prop]) || '';
   }
 
   /* ---------- File System Access：可自动刷新、可直写的目录模式 ---------- */
@@ -2179,47 +2210,52 @@
   });
 
   listEl.addEventListener('click', function (e) {
-    var el = e.target.closest('[data-act]');
-    if (!el) { return; }
-    var act = el.getAttribute('data-act');
-    var id = el.getAttribute('data-id');
+    // 点击卡片本体（非按钮）→ 选中该批注，手动修改面板跟随更新
+    var cardEl = e.target.closest('.card');
+    var actionEl = e.target.closest('[data-act]');
 
-    if (act === 'del') {
-      removeAnnotation(id);
-      return;
-    }
+    if (actionEl) {
+      var act = actionEl.getAttribute('data-act');
+      var id = actionEl.getAttribute('data-id');
 
-    if (act === 'focus') {
-      var ann = findAnn(id);
-      if (!ann) { return; }
-      var da = getDA();
-      if (da && da.focus) {
-        var ok = false;
-        try { ok = da.focus(ann.selector); } catch (err) { ok = false; }
-        if (ok) { status('已定位：' + ann.selector); flashCard(id); }
-        else { status('在页面上找不到该元素（页面可能已改变）：' + ann.selector, 'warn'); }
-      } else {
-        status('无法定位：页面不可访问（跨域）', 'warn');
+      if (act === 'del') {
+        removeAnnotation(id);
+        return;
       }
+
+      if (act === 'focus') {
+        var ann = findAnn(id);
+        if (!ann) { return; }
+        var da = getDA();
+        if (da && da.focus) {
+          var ok = false;
+          try { ok = da.focus(ann.selector); } catch (err) { ok = false; }
+          if (ok) { status('已定位：' + ann.selector); flashCard(id); }
+          else { status('在页面上找不到该元素（页面可能已改变）：' + ann.selector, 'warn'); }
+        } else {
+          status('无法定位：页面不可访问（跨域）', 'warn');
+        }
+        return;
+      }
+
+      if (act === 'write-src') {
+        writeSource(findAnn(id));
+        return;
+      }
+
+      if (act === 'delete-el') {
+        deleteElement(findAnn(id));
+        return;
+      }
+
       return;
     }
 
-    if (act === 'type') {
-      var a = findAnn(id);
-      if (!a) { return; }
-      a.type = el.getAttribute('data-type');
+    if (cardEl) {
+      var cid = cardEl.getAttribute('data-id');
+      state.selectedId = (state.selectedId === cid) ? null : cid;
       render();
-      save();
-      return;
-    }
-
-    if (act === 'write-src') {
-      writeSource(findAnn(id));
-      return;
-    }
-
-    if (act === 'delete-el') {
-      deleteElement(findAnn(id));
+      renderManualPanel();
       return;
     }
   });
@@ -2228,10 +2264,6 @@
     var el = e.target;
     var act = el.getAttribute && el.getAttribute('data-act');
     var id = el.getAttribute && el.getAttribute('data-id');
-    var q = el.getAttribute && el.getAttribute('data-q');
-
-    var annQ = q && id ? findAnn(id) : null;
-    if (annQ) { handleQuickInput(annQ, q, el.value); return; }
 
     if (!act || !id) { return; }
     var ann = findAnn(id);
@@ -2240,13 +2272,38 @@
     if (act === 'text') {
       ann.text = el.value;
       save();
-    } else if (act === 'css') {
-      var css = parseCss(el.value);
-      if (!ann.suggestedChanges) { ann.suggestedChanges = {}; }
-      if (Object.keys(css).length) { ann.suggestedChanges.css = css; }
-      else { delete ann.suggestedChanges.css; }
-      save();
     }
+  });
+
+  // 手动修改面板：结构化控件 → liveEdits；写源/删除按钮
+  var mpBody = document.getElementById('mp-body');
+  mpBody.addEventListener('input', function (e) {
+    var el = e.target;
+    var q = el.getAttribute && el.getAttribute('data-q');
+    var id = el.getAttribute && el.getAttribute('data-id');
+    if (!q || !id) { return; }
+    var ann = findAnn(id);
+    if (!ann) { return; }
+    handleManualInput(ann, q, el.value);
+  });
+  mpBody.addEventListener('change', function (e) {
+    var el = e.target;
+    var q = el.getAttribute && el.getAttribute('data-q');
+    var id = el.getAttribute && el.getAttribute('data-id');
+    if (!q || !id) { return; }
+    var ann = findAnn(id);
+    if (!ann) { return; }
+    if (q === 'bold' || q === 'italic' || q === 'underline') {
+      handleManualInput(ann, q, el.checked);
+    }
+  });
+  mpBody.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) { return; }
+    var act = el.getAttribute('data-act');
+    var id = el.getAttribute('data-id');
+    if (act === 'write-src') { writeSource(findAnn(id)); return; }
+    if (act === 'delete-el') { deleteElement(findAnn(id)); return; }
   });
 
   document.getElementById('btn-clear').addEventListener('click', function () {
@@ -2271,7 +2328,6 @@
   function annotationOut(a, page) {
     var o = {
       id: a.id,
-      type: a.type,
       page: page,
       selector: a.selector,
       xpath: a.xpath,
@@ -2286,8 +2342,6 @@
 
     var sc = {};
     var css = {};
-    var baseCss = (a.suggestedChanges && a.suggestedChanges.css) || {};
-    Object.keys(baseCss).forEach(function (k) { css[k] = baseCss[k]; });
 
     var le = a.liveEdits || {};
     Object.keys(le.style || {}).forEach(function (p) {
@@ -2392,7 +2446,7 @@
 
       items.forEach(function (a) {
         idx += 1;
-        lines.push('#### ' + idx + '. `' + a.selector + '` — ' + a.type);
+        lines.push('#### ' + idx + '. `' + a.selector + '`');
         lines.push('');
         lines.push('- 目标文件：`' + p + '`');
         lines.push('- 元素：`<' + a.tagName + '>`' + (a.textSnippet ? ' 文本：「' + a.textSnippet + '」' : ''));
@@ -2406,11 +2460,21 @@
             .map(function (k) { return k + ': ' + a.computedStyle[k]; });
           if (pair.length) { lines.push('- 当前样式：`' + pair.join('; ') + '`'); }
         }
-        if (a.suggestedChanges && a.suggestedChanges.css) {
-          var css = Object.keys(a.suggestedChanges.css).map(function (k) {
-            return k + ': ' + a.suggestedChanges.css[k];
-          });
-          lines.push('- CSS 建议：`' + css.join('; ') + '`');
+        if (a.suggestedChanges) {
+          var parts = [];
+          if (a.suggestedChanges.css) {
+            parts.push('CSS: ' + Object.keys(a.suggestedChanges.css).map(function (k) {
+              return k + ': ' + a.suggestedChanges.css[k];
+            }).join('; '));
+          }
+          if (a.suggestedChanges.attributes) {
+            parts.push('属性: ' + Object.keys(a.suggestedChanges.attributes).map(function (k) {
+              return k + '=' + a.suggestedChanges.attributes[k];
+            }).join('; '));
+          }
+          if (a.suggestedChanges.innerHTML != null) { parts.push('内容: ' + a.suggestedChanges.innerHTML); }
+          if (a.suggestedChanges.delete) { parts.push('删除元素'); }
+          if (parts.length) { lines.push('- 结构化建议：' + parts.join(' | ')); }
         }
         if (a.xpath) { lines.push('- XPath：`' + a.xpath + '`'); }
         if (a.htmlSnippet) {

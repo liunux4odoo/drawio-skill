@@ -49,17 +49,12 @@
   "definitions": {
     "annotation": {
       "type": "object",
-      "required": ["id", "type", "selector", "text"],
+      "required": ["id", "selector", "text"],
       "additionalProperties": true,
       "properties": {
         "id": {
           "type": "string",
           "description": "批注唯一标识，仅用于同一文件内引用。"
-        },
-        "type": {
-          "type": "string",
-          "enum": ["style", "layout", "content", "attr", "global"],
-          "description": "修改类型：style=样式；layout=布局/尺寸/位置；content=文案或结构；attr=HTML 属性；global=全局性意见（不绑定具体元素）。"
         },
         "page": {
           "type": "string",
@@ -126,7 +121,7 @@
           "properties": {
             "css": {
               "type": "object",
-              "description": "建议的 CSS 声明（kebab-case → 值）。",
+              "description": "建议的 CSS 声明（kebab-case → 值），来自手动修改面板的结构化控件。",
               "additionalProperties": { "type": "string" }
             },
             "attributes": {
@@ -137,6 +132,10 @@
             "innerHTML": {
               "type": "string",
               "description": "建议替换的内容片段。"
+            },
+            "delete": {
+              "type": "boolean",
+              "description": "true 表示用户要求删除该元素。"
             }
           }
         }

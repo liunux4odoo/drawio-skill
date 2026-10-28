@@ -114,21 +114,22 @@ http://localhost:8000/index.html
 | **「🎯 标注模式」** | 打开后单击即选中（等价于一直按着 Ctrl），适合触控板不好按组合键时 |
 | **悬停** | 按住 Ctrl 或开启标注模式时，元素显示蓝色虚线框 |
 | **侧栏「定位」/ 点击选择器** | 滚动回该元素并高亮（红框） |
-| **类型按钮** | 样式 / 布局 / 内容 / 属性 / 全局，决定 agent 的处理策略 |
-| **修改意见** | 写清「改成什么」，不要只写「不好看」 |
-| **CSS 建议（可选）** | 每行一条 `property: value`，会被解析成 `suggestedChanges.css` |
-| **快速修改（可选）** | 见下一节：不经过 AI 直接改颜色/字号/文本/图片并写回源文件 |
+| **点击卡片** | 选中该批注，底部「手动修改」面板自动切换到对应元素 |
+| **AI 修改** | 卡片上的意见框，写清「改成什么」（自然语言），导出为 `text` |
+| **手动修改** | 见下一节：不经过 AI 直接改颜色/字号/文本/图片并写回源文件 |
 | **同一元素再次点击** | 更新已有批注，不重复创建 |
 | **Esc** | 取消悬停高亮 |
 
-### 快速修改：不经过 AI，直接写回源文件
+### 手动修改：不经过 AI，直接写回源文件
 
-选中元素 → 展开「快速修改」：
+侧栏底部是**唯一一个**手动修改面板：点击卡片选中批注后，参数自动更新为对应元素。第一行是「文字色 / 背景色 / 字号」，第二行「加粗 / 斜体 / 下划线 / 对齐」，第三行「圆角 / 内边距 / 宽 / 高」，然后是文本与图片：
 
 | 控件 | 写入内容 |
 |------|----------|
 | 文字色 / 背景色 | 内联 `style` 的 `color` / `background-color`（被压制时自动补 `!important`） |
 | 字号 / 圆角 / 内边距 / 宽 / 高 | 同上，单位 px |
+| 加粗 / 斜体 / 下划线 | `font-weight: bold` / `font-style: italic` / `text-decoration: underline` |
+| 对齐 | `text-align: left/center/right/justify` |
 | 文本 | 替换该元素的文本节点（**仅当元素不含子元素**，否则输入框禁用） |
 | 图片 | `img src` 下拉，列出项目里已有的图片，保留原有的 `/` 绝对写法 |
 
@@ -209,7 +210,7 @@ cat .dom-annotator/annotations.json | your-agent --stdin
 详见 `SKILL.md`。要点：
 - 校验 `schemaVersion === "dom-feedback-1"`
 - 按 `annotations[].selector` 用 `document.querySelector` 定位；失败再试 `xpath`，仍失败就**报告歧义，不猜**
-- 依 `type` 决定改法：`style` → CSS；`layout` → 布局属性；`content` → 文案/结构；`attr` → 属性；`global` → 全局建议
+- 按 `suggestedChanges` 决定改法：有 `css` → 内联样式；有 `attributes` → 属性；有 `innerHTML` → 内容；有 `delete` → 删除元素；只有 `text` → 自然语言判断
 - 有 `suggestedChanges.css` 时可直接采用
 - **必须落盘改源文件**，不能只改内存
 - 应用完可选：删除或标记 `annotations.json`，避免重复应用
