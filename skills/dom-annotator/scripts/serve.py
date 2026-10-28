@@ -442,7 +442,13 @@ def list_html(root: str) -> list[str]:
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".git")]
         for fn in filenames:
             if fn.lower().endswith((".html", ".htm", ".xhtml")):
-                out.append(os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/"))
+                rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+                # 排除标注页自身（按文件名，兼容拷贝副本）：把 skill 目录或含
+                # annotator.html 的目录当目标目录时，避免入口/站内链接加载出
+                # 「annotator 嵌套 annotator」
+                if os.path.basename(fn).lower() == "annotator.html":
+                    continue
+                out.append(rel)
     out.sort(key=lambda p: (0 if os.path.basename(p).lower().startswith("index.") else 1, p))
     return out
 
@@ -596,6 +602,11 @@ class Handler(BaseHTTPRequestHandler):
             self._error(403, "forbidden")
             return
         full = os.path.join(ROOT, rel)
+        # 目标目录里若恰好有 annotator.html（把 skill 目录当目标目录，或目录里
+        # 拷贝了标注页副本），静态服务不暴露它，避免 iframe/站内链接加载出嵌套标注页
+        if os.path.basename(full).lower() == "annotator.html":
+            self._error(404, "not found: %s" % rel)
+            return
         if os.path.isdir(full):
             full = os.path.join(full, "index.html")
         if not os.path.isfile(full):

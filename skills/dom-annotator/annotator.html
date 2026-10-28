@@ -568,6 +568,21 @@
 
   var VERSION = '0.11';
 
+  // 防御：annotator 页面不应被嵌套在 iframe 里（正常使用它自己是顶层窗口）。
+  // 不带参数运行 serve.py 且目标目录恰好含 annotator.html 时，iframe 可能加载到它自己，
+  // 造成「标注页嵌标注页」。检测到就提示并停止初始化。
+  var inIframe = false;
+  try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
+  if (inIframe) {
+    var nestedNotice = document.getElementById('notice');
+    if (nestedNotice) {
+      nestedNotice.className = 'notice show';
+      nestedNotice.innerHTML = '检测到 annotator 页面被嵌套在 iframe 中（目标目录可能错误地包含了 annotator.html）。' +
+        '请用 <code>serve.py --dir &lt;目标目录&gt;</code> 指定正确的站点目录，不要直接把本 skill 目录当目标。';
+    }
+    return;
+  }
+
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
   var countEl = document.getElementById('count');
