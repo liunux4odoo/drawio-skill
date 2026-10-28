@@ -98,7 +98,7 @@
     font-family: inherit;
   }
   .tab.active { background: var(--acc); border-color: var(--acc); color: #fff; }
-  .tab.stale-tab.active { background: #a05; border-color: #a05; }
+  .tab.done-tab.active { background: #2a6b3f; border-color: #2a6b3f; }
   .tab span { opacity: .8; }
   .list { flex: 1 1 auto; overflow: auto; padding: 8px; }
   .empty { color: #666; font-size: 12px; padding: 16px 8px; line-height: 1.8; }
@@ -157,9 +157,11 @@
     white-space: nowrap;
   }
   .chip.ver { color: #8a8a8a; background: #222; border-color: #3c3c3c; }
+  .card.done { border-color: #2a6b3f; }
   .card.stale { border-color: #7a4a2a; opacity: .82; }
   .card.stale .sel { color: #e2b93d; text-decoration: line-through; }
   .stale-tag { font-size: 11px; color: #e2b93d; }
+  .done-tag { font-size: 11px; color: #6cc47a; }
   details.quick { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
   .qf { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
   .qrow { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
@@ -204,7 +206,7 @@
   <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.13</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.14</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
   <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
@@ -235,8 +237,8 @@
         <button class="tab" data-mode="manual">手动模式</button>
       </div>
       <div class="tabs" id="status-tabs">
-        <button class="tab active" data-tab="active">有效 <span id="cnt-active"></span></button>
-        <button class="tab stale-tab" data-tab="stale">已失效 <span id="cnt-stale"></span></button>
+        <button class="tab active" data-tab="pending">待执行 <span id="cnt-pending"></span></button>
+        <button class="tab done-tab" data-tab="done">已完成 <span id="cnt-done"></span></button>
       </div>
       本页 <span id="count">0</span> 条 · 共 <span id="total">0</span> 条 / <span id="pages">0</span> 页
     </div>
@@ -551,7 +553,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.13';
+  var VERSION = '0.14';
 
   // 防御：annotator 页面不应被嵌套在 iframe 里（正常使用它自己是顶层窗口）。
   // 不带参数运行 serve.py 且目标目录恰好含 annotator.html 时，iframe 可能加载到它自己，
@@ -591,7 +593,7 @@
     sessionKey: '',
     byPage: {},
     annotations: [],
-    tab: 'active',
+    tab: 'pending',
     panelMode: 'ai',
     selectedId: null,
     zoomScale: 1,
@@ -766,14 +768,20 @@
 
   /* ---------- 渲染 ---------- */
 
+  // 状态语义：待执行 = 标注了但还没改完（含元素失效/被删但尚未确认的情况，会有警告徽标）；
+  // 已完成 = agent 明确标记完成（a.done），或用户在标注页写回源文件成功（也置 a.done）。
+  // 注意：a.stale（元素失效）与 a.deleted 本身不算完成——结构变化不等于任务完成，
+  // 它们留在「待执行」里并显示警告，让 agent 先确认再处理。
+  function isDone(a) { return !!a.done; }
+
   function render() {
-    var staleCount = state.annotations.filter(function (a) { return !!a.stale; }).length;
-    var activeCount = state.annotations.length - staleCount;
+    var doneCount = state.annotations.filter(isDone).length;
+    var todoCount = state.annotations.length - doneCount;
     totalEl.textContent = String(totalAnnotations());
     pagesEl.textContent = String(annotatedPages().length);
     pageNameEl.textContent = state.page || '';
-    document.getElementById('cnt-active').textContent = String(activeCount);
-    document.getElementById('cnt-stale').textContent = String(staleCount);
+    document.getElementById('cnt-pending').textContent = String(todoCount);
+    document.getElementById('cnt-done').textContent = String(doneCount);
 
     var panel = document.getElementById('manual-panel');
     var statusTabs = document.getElementById('status-tabs');
@@ -798,7 +806,7 @@
     panel.style.maxHeight = '';
 
     var visible = state.annotations.filter(function (a) {
-      return state.tab === 'stale' ? !!a.stale : !a.stale;
+      return state.tab === 'done' ? isDone(a) : !isDone(a);
     });
     countEl.textContent = String(visible.length);
 
@@ -806,23 +814,24 @@
       var hint = state.dirFiles
         ? '<br><br>本页还没有批注；页面里的站内链接可以直接点，切页不会丢失其它页的批注。'
         : '';
-      var emptyMsg = state.tab === 'stale'
-        ? '没有失效批注。<br>失效 = 页面重载后选择器匹配不到元素（或匹配到的元素与记录不一致）。'
-        : '还没有批注。<br>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击右侧页面中的元素，或打开「标注模式」后直接点击。<br><br>点「定位」可回看元素位置。' + hint;
+      var emptyMsg = state.tab === 'done'
+        ? '还没有已完成的批注。<br>完成 = agent 处理完该条后标记 done，或用户在标注页直接写回源文件。'
+        : '还没有待执行的批注。<br>按住 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> 点击右侧页面中的元素，或打开「标注模式」后直接点击。<br><br>点「定位」可回看元素位置。' + hint;
       listEl.innerHTML = '<div class="empty">' + emptyMsg + '</div>';
       return;
     }
 
     var html = visible.map(function (a) {
       return '' +
-        '<div class="card' + (a.stale ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-id="' + a.id + '">' +
+        '<div class="card' + (isDone(a) ? ' done' : '') + (a.stale && !isDone(a) ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-id="' + a.id + '">' +
           '<div class="card-head">' +
             '<span class="idx">#' + (state.annotations.indexOf(a) + 1) + '</span>' +
             '<span class="sel" data-act="focus" data-id="' + a.id + '" title="' + escapeHtml(a.xpath || '') + '">' +
               escapeHtml(a.selector || '') +
             '</span>' +
-            (a.stale ? '<span class="stale-tag" title="页面重载后该选择器匹配不到元素，或匹配到的元素与记录不一致">已失效</span>' : '') +
-            (a.deleted ? '<span class="stale-tag" title="该元素已从源文件删除">已删除</span>' : '') +
+            (a.done ? '<span class="done-tag" title="agent 已完成该条标注的修改">已完成</span>' : '') +
+            (a.stale && !isDone(a) ? '<span class="stale-tag" title="页面重载后该选择器匹配不到元素，说明源文件已被改动，待确认">元素失效</span>' : '') +
+            (a.deleted && !isDone(a) ? '<span class="stale-tag" title="该元素已从源文件删除">已删除</span>' : '') +
             '<span class="actions">' +
               '<button data-act="focus" data-id="' + a.id + '">定位</button>' +
               '<button data-act="del" data-id="' + a.id + '" title="删除该批注">删</button>' +
@@ -1370,9 +1379,41 @@
     mountPage(rel);
     restoreSession();
     mountPage(rel);
+    mergeExternalDone();
     markStale();
     state.busy = false;
 
+  }
+
+  // 服务模式下从磁盘读回 annotations.json 的外部状态（agent 可能已把某条标记 done: true），
+  // 合并到当前会话：按 (page, id) 匹配，只更新 done / deleted / applied 状态位，不动用户本地编辑。
+  function mergeExternalDone() {
+    if (!state.serverMode) { return; }
+    fetch('/__da__/ann', { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) { return; }
+      return res.json();
+    }).then(function (out) {
+      if (!out || !out.ok || !out.found || !Array.isArray(out.annotations)) { return; }
+      var ext = {};
+      out.annotations.forEach(function (a) {
+        if (!a || !a.page || !a.id) { return; }
+        if (!ext[a.page]) { ext[a.page] = {}; }
+        ext[a.page][a.id] = a;
+      });
+      Object.keys(ext).forEach(function (page) {
+        var list = state.byPage[page];
+        if (!list) { return; }
+        list.forEach(function (local) {
+          var remote = ext[page][local.id];
+          if (!remote) { return; }
+          if (remote.done) { local.done = true; }
+          if (remote.deleted) { local.deleted = true; }
+          if (remote.appliedToSource) { local.applied = true; }
+        });
+      });
+      render();
+      save();
+    }).catch(function () { /* 网络失败静默：保持本地状态 */ });
   }
 
   async function loadImageList() {
@@ -1602,6 +1643,7 @@
       var out = await res.json();
       if (res.ok && out.ok) {
         a.applied = true;
+        a.done = true;   // 写回源文件成功 = 该条执行完成
         if (hint) { hint.textContent = ''; }
         status('已写入 ' + (out.page || '') + '（备份：' + (out.backup || '—') + '），马上刷新预览', 'ok');
         // 写盘后主动刷新预览（不等 SSE 广播，保证「马上」回传刷新）
@@ -1661,6 +1703,7 @@
         try { el.remove(); } catch (e) { /* ignore */ }
         a.applied = true;
         a.deleted = true;
+        a.done = true;   // 删除元素成功 = 该条执行完成
         if (hint) { hint.textContent = ''; }
         status('已删除 ' + (out.page || '') + ' 中的元素（备份：' + (out.backup || '—') + '），等待刷新', 'ok');
         render();
@@ -1842,8 +1885,9 @@
     }
 
     // 手动改动后源文件里不再是当前状态：清掉「已写入」标记，
-    // 让导出重新带上 suggestedChanges
+    // 让导出重新带上 suggestedChanges；并回到「待执行」状态
     a.applied = false;
+    a.done = false;
     applyLive(a);
     save();
   }
@@ -2304,7 +2348,7 @@
   document.querySelector('.aside-head .tabs').addEventListener('click', function (e) {
     var btn = e.target.closest('.tab');
     if (!btn) { return; }
-    state.tab = btn.getAttribute('data-tab') === 'stale' ? 'stale' : 'active';
+    state.tab = btn.getAttribute('data-tab') === 'done' ? 'done' : 'pending';
     document.querySelectorAll('.aside-head .tabs .tab').forEach(function (t) {
       t.classList.toggle('active', t === btn);
     });
@@ -2446,6 +2490,8 @@
       text: a.text || ''
     };
     if (a.stale) { o.stale = true; }
+    if (a.done) { o.done = true; }
+    if (a.deleted) { o.deleted = true; }
 
     var sc = {};
     var css = {};

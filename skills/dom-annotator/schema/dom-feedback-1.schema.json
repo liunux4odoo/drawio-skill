@@ -112,7 +112,15 @@
         },
         "stale": {
           "type": "boolean",
-          "description": "true 表示页面重载后该 selector 已匹配不到元素（元素被删除或改名）。不要猜测修改目标，应先请用户确认。"
+          "description": "true 表示页面重载后该 selector 已匹配不到元素（元素被删除或改名）。注意：stale 本身不算完成，标注页把它留在「待执行」并显示「元素失效」警告。不要猜测修改目标，应先请用户确认。"
+        },
+        "done": {
+          "type": "boolean",
+          "description": "true 表示该条标注已执行完成：agent 按建议改完代码后应在 annotations.json 里把对应条目标记 done=true（或删除该条）；标注页手动写回源文件成功时也会自动置 true。只有 done=true 的条目才归入前端「已完成」tab。"
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "true 表示该元素已从源文件删除（标注页手动删除成功）。agent 不要重复删除。"
         },
         "appliedToSource": {
           "type": "boolean",

@@ -554,6 +554,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__da__/events":
             self._serve_events()
             return
+        if path == "/__da__/ann":
+            self._serve_annotations()
+            return
 
         self._serve_static(path)
 
@@ -657,6 +660,26 @@ class Handler(BaseHTTPRequestHandler):
                     out.append(os.path.relpath(os.path.join(dirpath, fn), ROOT).replace(os.sep, "/"))
         out.sort()
         self._json({"ok": True, "type": kind, "files": out[:500]})
+
+    # 读回 .dom-annotator/annotations.json（agent 可能在外部改过 done 等状态），
+    # 供标注页合并外部状态（如 agent 完成修改后标记的 done: true）
+    def _serve_annotations(self) -> None:
+        out_path = os.path.join(ROOT, ".dom-annotator", "annotations.json")
+        if not os.path.isfile(out_path):
+            self._json({"ok": True, "found": False, "annotations": []})
+            return
+        try:
+            with open(out_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            self._json({"ok": True, "found": False, "annotations": []})
+            return
+        anns = data.get("annotations") if isinstance(data, dict) else None
+        self._json({
+            "ok": True,
+            "found": True,
+            "annotations": anns if isinstance(anns, list) else [],
+        })
 
     def _apply_edits(self) -> None:
         if WRITE_MODE != "inline":
@@ -782,17 +805,30 @@ def stop_sse_watcher() -> None:
         _sse_running = False
 
 
+def _ann_sig() -> tuple:
+    """.dom-annotator/annotations.json 的签名（scan() 跳过该目录，单独监控）。"""
+    p = os.path.join(ROOT, ".dom-annotator", "annotations.json")
+    try:
+        st = os.stat(p)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _sse_watcher_loop() -> None:
     global _sse_gen
     last = None
+    last_ann = None
     while True:
         with _sse_cond:
             if not _sse_running:
                 return
         cur = scan(ROOT)
+        ann = _ann_sig()
         with _sse_cond:
-            if cur != last:
+            if cur != last or ann != last_ann:
                 last = cur
+                last_ann = ann
                 _sse_gen += 1
                 _sse_cond.notify_all()
         time.sleep(0.7)
