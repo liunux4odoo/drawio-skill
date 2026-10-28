@@ -1,241 +1,64 @@
 # Work Skills
 
-A collection of [Agent Skills](https://agentskills.io) for AI agents. Each skill
-lives in its own folder under `skills/` following the Agent Skills layout
-(`<skill-name>/SKILL.md`), so any skill-capable agent can load it.
+一个面向 AI 智能体的技能（Agent Skills）集合。每个技能独立放在 `skills/<名称>/` 目录中，遵循标准 Agent Skills 布局（`<skill-name>/SKILL.md`），任何支持技能的智能体都可以直接加载使用。
 
-## Contents
+## 技能一览
 
-```
-skills/
-├── dom-annotator/
-│   ├── SKILL.md              # apply DOM annotations (element-selector feedback) to HTML
-│   ├── annotator.html        # standalone annotation page: load local file / URL, Ctrl+click elements
-│   ├── schema/
-│   │   └── dom-feedback-1.schema.json  # the JSON contract agents read
-│   ├── references/
-│   │   └── usage.md              # how to open the page, transfer feedback, FAQ
-│   └── scripts/
-│       └── serve.py              # one-command launcher: serve dir + watch + write annotations back
-├── drawio/
-│   ├── SKILL.md              # create/edit draw.io XML diagrams
-│   └── references/
-│       ├── verify_diagram.py     # mechanical verifier: structure + geometry + label overflow
-│       ├── render_drawio.py      # stdlib-only SVG exporter (optional PNG via cairosvg)
-│       ├── generate_diagram.py   # transient generator template (box/edge/container helpers)
-│       └── patterns.md           # copy-paste patterns + full style catalog
-├── quarkdown/
-│   ├── SKILL.md              # author .qd documents (typeset HTML/PDF/slides/wikis)
-│   ├── references/
-│   │   └── quick-reference.md    # copy-paste syntax for common tasks + wiki pointers
-│   └── scripts/
-│       ├── md2pdf.py             # plain Markdown → PDF via a generated .qd template
-│       └── extract_docx_style.py # docx / docx-generator → reusable .qd template
-├── skill-hub/
-│   ├── SKILL.md              # install/maintain skills from user-specified URLs
-│   ├── references/
-│   │   ├── commands.md           # every verb/flag, URL forms, update flow
-│   │   ├── agents.md             # agent alias table, env roots, path sources
-│   │   └── registry.md           # registry schema, migrations, link vs copy
-│   └── scripts/
-│       └── skill_hub.py          # stdlib-only registry: add/install/update/list/status/uninstall
-└── qwenpaw/
-    ├── SKILL.md              # query QwenPaw agents' accumulated memory
-    └── scripts/
-        ├── qwenpaw_agents.py     # list/find QwenPaw agents
-        └── qwenpaw_search.py     # search one agent's ReMe memory index
-```
+### DOM Annotator（`skills/dom-annotator/`）
 
-## Installation
+**做什么**：在浏览器里打开你的 HTML 页面，用鼠标点选元素、写下修改意见，生成智能体可直接读取的机器化反馈清单，而不是一张截图。
 
-Each skill lives at `skills/<name>/` following the Agent Skills layout
-(`<skill-name>/SKILL.md`), so any skill-capable agent can load it:
+**应用场景**：给智能体布置网页修改任务——先在可视化页面里圈出要改的地方，智能体照单精确修改。
 
-- **Claude Code / Claude**: install the skill folder into your agent's skills
-  directory.
-- **Kilo**: add `skills/<name>` to the `skills.paths` list in `kilo.json`, or
-  copy the folder into `.kilo/skills/` of any project.
-- **Manual**: copy the whole skill folder wherever your agent expects skills
-  (the `references/` and `scripts/` subfolders must travel with `SKILL.md`).
+**价值特色**：简单、快速、高效的 HTML 修改器。无需编辑器插件、浏览器扩展或 MCP 服务；支持整目录打开、多页面标注、手机/平板/桌面视口切换；改动会写回 `.dom-annotator/annotations.json`，小改动（颜色、字号、间距、文字、图片）甚至可以直接写入源文件，无需智能体参与。
 
-Once installed, just ask in natural language — e.g. *"Create a login flow
-diagram as `login.drawio`"*, *"Write a PDF-ready report in Quarkdown"*,
-*"Apply the annotations in `.dom-annotator/annotations.json`"*, or
-*"Ask the travel assistant what it knows about visa documents."*
+### Drawio（`skills/drawio/`）
 
-## Skills
+**做什么**：让智能体直接以 XML 编写、修改和重构 draw.io 图表文件（`.drawio`）。
 
-### DOM Annotator (`skills/dom-annotator/`)
+**应用场景**：流程图、架构图、思维导图等任何需要 draw.io 图表的场景。
 
-Lets the user **point at rendered HTML and write change notes**, then hands the
-agent a machine-readable list instead of a screenshot. `annotator.html` is a
-single dependency-free page. Three ways in: **open a whole folder** (CSS,
-images, fonts and plain scripts are inlined so the render matches the browser —
-no server needed), pick a single HTML file, or load a URL. Hold `Ctrl`/`⌘` (or
-toggle annotate mode) and click any element.
+**价值特色**：为"看不见渲染结果"的智能体设计了布局规划与坐标/XML 校验机制，每次改动都有机械校验，视力模型还可渲染成图片复核，保证图表质量稳定可靠。
 
-On Chromium the folder path uses the File System Access API, so the page
-**re-renders itself when files change on disk** (agent edits → view updates,
-annotations kept, dead selectors flagged `stale`), **writes
-`.dom-annotator/annotations.json` straight into the project**, and remembers the
-last folder across sessions. Firefox/Safari fall back to snapshot mode.
+### Quarkdown（`skills/quarkdown/`）
 
-Cleanest flow is one sentence to the agent — *"annotate the pages in `~/site`"* —
-which runs the bundled launcher:
+**做什么**：让智能体用 Quarkdown（`.qd`）排版语言撰写文档，编译输出 HTML、PDF 或纯文本。
 
-```bash
-python3 scripts/serve.py --dir ~/site      # opens the browser, loads the dir
-```
+**应用场景**：文章、报告、幻灯片、书籍、维基、静态站点等需要精美排版的文档。
 
-That serves the folder over `127.0.0.1` (so `type="module"` and page `fetch()`
-work), pushes file changes over SSE, and writes the annotations back on save —
-no permission prompt, no path hunting.
+**价值特色**：提供常用语法的速查手册，大多数文档无需翻文档即可直接编译；还附带了把纯 Markdown 转 PDF、把 `.docx` 样式提取为可复用模板的便捷脚本。
 
-Small deterministic edits skip the agent entirely: select an element, tweak
-colour / font-size / padding / text / image `src` in the side panel, hit
-**write to source**. The launcher rewrites just that byte range in the HTML
-(backup first), and the page re-renders from the file. Anything it can't do
-safely — runtime-generated nodes, text inside an element with children — stays
-in the export as a `suggestedChanges` block for the agent, flagged by the
-absence of `appliedToSource`.
+### Skill Hub（`skills/skill-hub/`）
 
-Each annotation records a stable CSS selector, an XPath fallback, the element's
-computed-style snapshot, text/HTML snippets, the user's note, and optional
-`property: value` CSS suggestions.
+**做什么**：从你提供的 URL 安装和维护技能集合，管理你在各智能体/项目之间共享的技能库。
 
-Sites are usually a set of pages, so folder mode is multi-page: click links
-inside the rendered page (or use the entry dropdown) to move between HTML files,
-and annotations from every page are merged into one export — each tagged with
-its `page` so the agent edits the right file. A viewport dropdown re-renders the
-page at phone / tablet / desktop widths so media queries can be reviewed and
-annotated in place.
+**应用场景**：给多个智能体或项目安装同一批技能、统一更新、查看状态、卸载。
 
-Feedback is exported as `dom-feedback-1` JSON. Drop it at
-`<workspace>/.dom-annotator/annotations.json` and tell the agent *"apply the
-annotations"* — no editor integration, no browser extension, no MCP server, no
-pixel coordinates. Clipboard (JSON or Markdown) is the fallback for chat-only
-agents.
+**价值特色**：实现了技能的智能、简便管理。一次添加即可注册到统一仓库，按需链接或复制到任意目标目录；支持批量安装、增量更新（服务器未变更时跳过下载）、名称冲突显式报错，全程零外部依赖。
 
-```bash
-# Serve the page over HTTP when the target site needs its CSS/assets to load
-cd skills/dom-annotator && python3 -m http.server 8000
-# then open http://localhost:8000/annotator.html
-```
+### QwenPaw（`skills/qwenpaw/`）
 
-Selector priority: `#id` → `data-testid`/`name`/`aria-label` → unique class
-combination → path with `:nth-of-type`. Annotating against an HTTP-served copy
-(not `file://`) gives the best fidelity.
+**做什么**：查询 QwenPaw 智能体长期积累的经验与记忆。
 
-### Drawio (`skills/drawio/`)
+**应用场景**：让任何智能体都能问历史经验——比如让助手去查旅行助手记得的签证材料清单，再据此回答你的问题。
 
-Teaches an agent how to create, modify, and refactor **draw.io diagram files**
-(`.drawio`) directly as XML. Any draw.io client (editor, viewer, renderer)
-interprets the XML; the agent writes raw XML and usually cannot see the rendered
-result, so the skill enforces layout planning and coordinate/XML checks on every
-change, with rendered-image verification as a supplement for vision-capable
-agents.
+**价值特色**：任何智能体都可以访问 QwenPaw 的记忆。自动定位正确的智能体，只读搜索其 ReMe 记忆索引，绝不改写原始数据。
 
-Usage workflow: plan the layout in coordinates (§3 of `SKILL.md`), write the
-XML directly or via a transient generator for data-driven diagrams, verify
-mechanically on every change with `references/verify_diagram.py`, and (if
-vision-capable) render `references/render_drawio.py file.drawio -o out.svg` and
-visually inspect.
+## 安装
 
-```bash
-# Verify a file (exit 0 clean, 1 errors; --strict promotes warnings)
-python3 references/verify_diagram.py file.drawio [--min-gap 40] [--strict]
+把 `skills/<名称>/` 整个目录放到你的智能体技能目录中即可：
 
-# Render to SVG (no dependencies); --png needs cairosvg
-python3 references/render_drawio.py file.drawio [-o out.svg] [--png]
+- **Claude Code / Claude**：将技能目录安装到智能体的 skills 目录。
+- **Kilo**：在 `kilo.json` 的 `skills.paths` 中加入 `skills/<名称>`，或把目录复制到项目的 `.kilo/skills/`。
+- **手动**：复制整个技能目录（`references/` 和 `scripts/` 子目录需与 `SKILL.md` 一起保留）。
 
-# Transient generator template (edit DATA, then paste stdout into the .drawio)
-python3 references/generate_diagram.py > out.drawio
-```
+安装后直接用自然语言下达任务即可，例如：
 
-### Quarkdown (`skills/quarkdown/`)
-
-Teaches an agent to author **Quarkdown** (`.qd`) documents — a Markdown-superset
-typesetting language that compiles to HTML, PDF, or plaintext for articles,
-reports, slides, books, wikis, and static sites. `SKILL.md` lists every
-capability (metadata, math, figures, tables, cross-references, layout, slides,
-multi-file projects, data & scripting) and maps each to the relevant page of the
-offline wiki shipped with Quarkdown. `references/quick-reference.md` provides
-copy-paste syntax for the most common tasks, so most documents compile without
-opening the wiki.
-
-Compile to verify (always `--strict`, output to a scratch dir):
-
-```bash
-quarkdown c main.qd --strict --out /tmp/quarkdown-verify   # HTML
-quarkdown c main.qd --pdf --strict --out /tmp/quarkdown-verify  # PDF
-```
-
-To turn a **plain Markdown** file into a PDF without authoring `.qd`, use the
-bundled helper (it builds a temporary Quarkdown template, compiles, and cleans
-up — the source `.md` is never modified):
-
-```bash
-python3 scripts/md2pdf.py input.md [-o out.pdf] [--theme ...] [--numbered on|off]
-```
-
-To turn a **`.docx`** (or a `.py` that generates one) into a reusable Quarkdown
-template — fonts, sizes, colors, paragraph spacing, alignment, and heading
-numbering — use the style extractor:
-
-```bash
-python3 scripts/extract_docx_style.py input.docx [-o template.qd] [--dry-run]
-```
-
-### Skill Hub (`skills/skill-hub/`)
-
-Teaches an agent to **install and maintain a user-curated set of skills** from
-URLs the user supplies. The user provides a tarball URL; the helper downloads
-it once to `~/.local/share/skill-hub/skills/<name>/` and registers it in
-`~/.config/skill-hub/registry.json`. The agent then links (or copies) that
-store entry into one or more target directories — typically the `skills/`
-folders of various agents or projects.
-
-- **Bundle mode**: if the URL's tarball extracts to a `skills/<child>/SKILL.md`
-  layout, the helper registers every child in one call (typical for repos that
-  ship several skills together).
-- **Name inference**: `add <url>` (no name) reads `SKILL.md` frontmatter or
-  falls back to the URL basename; the explicit name always wins.
-- **Update v0.2**: tries `HTTP HEAD` first (ETag/Last-Modified) and skips the
-  full download when the server says "not modified"; falls back to SHA-256
-  comparison when HEAD can't decide.
-- **Name collisions** are explicit errors — no auto-namespacing.
-
-The skill does **not** search, browse, or recommend skills — only
-install/maintain what the user has pointed at.
-
-```bash
-HUB=~/.local/share/work-skills/skills/skill-hub/scripts/skill_hub.py
-
-python3 $HUB add   [<name>] <tarball-url>    # download + register (1 or N skills)
-python3 $HUB install <name> <target>         # symlink (default)
-python3 $HUB install <name> <target> --copy  # duplicate
-python3 $HUB update [name]                   # HEAD check; refresh all installs
-python3 $HUB list
-python3 $HUB status <name>                   # installed vs latest
-python3 $HUB uninstall <name> <target>       # remove install (store kept)
-```
-
-### QwenPaw (`skills/qwenpaw/`)
-
-Teaches an agent to query **QwenPaw** agents' accumulated experience and memory.
-Each QwenPaw agent keeps an isolated memory (notes plus a ReMe index); the skill
-first resolves the right agent with `scripts/qwenpaw_agents.py`, then searches
-its memory with `scripts/qwenpaw_search.py --agent <id> "<query>"`. The scripts
-are read-only and never write to QwenPaw's index.
-
-```bash
-python3 scripts/qwenpaw_agents.py                    # list all agents + memory size
-python3 scripts/qwenpaw_search.py --agent travel-assistant "签证材料清单"
-```
-
-The scripts need the QwenPaw runtime's Python (where `reme-ai` is installed).
+- "创建一个登录流程图，保存为 `login.drawio`"
+- "用 Quarkdown 写一份可导出 PDF 的报告"
+- "把 `.dom-annotator/annotations.json` 里的标注应用到页面"
+- "问一下旅行助手它记得的签证材料清单"
 
 ## License
 
-Apache 2.0 — the drawio skill is derived from the prompt engineering in
-[next-ai-draw-io](https://github.com/DayuanJiang/next-ai-draw-io).
+Apache 2.0 — drawio 技能衍生自 [next-ai-draw-io](https://github.com/DayuanJiang/next-ai-draw-io) 的提示工程。
