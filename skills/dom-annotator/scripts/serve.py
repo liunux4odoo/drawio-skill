@@ -83,7 +83,7 @@ class EditError(Exception):
 
 class Node:
     __slots__ = ("tag", "start", "close", "self_closing", "attrs", "attr_spans",
-                 "children", "parent", "runs")
+                 "children", "parent", "runs", "end")
 
     def __init__(self, tag, start, close, self_closing, attrs, attr_spans, parent):
         self.tag = tag
@@ -95,12 +95,24 @@ class Node:
         self.children = []
         self.parent = parent
         self.runs = []          # 直接文本片段 [(start, end, raw)]
+        self.end = None         # 结束标签 '>' 之后的位置；无显式结束标签则为 None
 
     def attr(self, name, default=""):
         return self.attrs.get(name, default)
 
     def insert_pos(self):
         return self.close - 1 if self.self_closing else self.close
+
+    def delete_span(self):
+        """删除整个元素需要的源区间 [start, end)；无法安全删除时抛 EditError。"""
+        if self.tag in ("html", "body"):
+            raise EditError("delete-protected", "不能直接删除 <html>/<body> 根元素")
+        if self.self_closing or self.tag in VOID_TAGS:
+            return self.start, self.close + 1
+        if self.end is None:
+            raise EditError("no-end-tag",
+                            "源文件里该元素没有显式结束标签（未闭合），无法安全删除整块内容")
+        return self.start, self.end
 
     def text_span(self):
         """元素只含文本时返回合并后的区间，否则 None。"""
@@ -179,6 +191,10 @@ class _Tree(HTMLParser):
     def handle_endtag(self, tag):
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i].tag == tag:
+                node = self.stack[i]
+                start = self._pos()
+                end = self._tag_close(start)
+                node.end = end + 1
                 del self.stack[i:]
                 return
 
@@ -297,6 +313,10 @@ def apply_edits(src: str, target: dict, edits: list):
             else:
                 insert_attrs.append((name, value))
             changed.append({"kind": "attr", "name": name})
+        elif kind == "delete":
+            dstart, dend = node.delete_span()
+            ops.append((dstart, dend, ""))
+            changed.append({"kind": "delete"})
         else:
             raise EditError("bad-edit", "未知的修改类型：%r" % kind)
 

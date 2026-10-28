@@ -184,6 +184,8 @@
   }
   .qrow button:hover { border-color: var(--acc); color: #fff; }
   .qrow button[disabled] { opacity: .45; cursor: not-allowed; }
+  .qrow button.del { background: #4a2a2a; border-color: #6a3a3a; color: #f3d9d9; }
+  .qrow button.del:hover { background: #5d3333; border-color: #a05; color: #fff; }
   .qhint { font-size: 10px; color: var(--dim); }
 </style>
 </head>
@@ -195,7 +197,7 @@
   <button id="btn-restore" hidden>恢复上次文件夹</button>
   <select id="entry-select" hidden title="选择要标注的 HTML 文件"></select>
   <span class="chip" id="watch-chip" hidden></span>
-  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.7</span>
+  <span class="chip ver" id="ver-chip" title="页面版本，用于确认不是旧缓存">v0.8</span>
   <input id="url-input" type="url" placeholder="或输入 URL（如 http://localhost:8000/page.html）">
   <button id="btn-url">加载 URL</button>
   <select id="viewport-select" title="切换渲染视口（媒体查询随之生效）">
@@ -535,7 +537,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.7';
+  var VERSION = '0.8';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -1239,6 +1241,7 @@
     if (!doc) { return; }
 
     state.annotations.forEach(function (a) {
+      if (a.deleted) { a.stale = false; return; }   // 已删除的元素不再标失效
       var el = null;
       try { el = doc.querySelector(a.selector); } catch (e) { el = null; }
       if (!el) {
@@ -1580,6 +1583,61 @@
     }
   }
 
+  // 删除元素：预览立即移除，服务模式写回源文件（删除整个元素区间）
+  async function deleteElement(a) {
+    if (!a) { return; }
+    if (!state.serverMode) {
+      status('只有「服务模式」能直接删除源元素；当前会作为建议随标注导出', 'warn');
+      return;
+    }
+    if (!state.serverWritable) {
+      status('服务以 --write-mode=suggest 启动，未开启写入', 'warn');
+      return;
+    }
+    var el = findElement(a);
+    if (!el) {
+      status('页面上找不到该元素，无法删除', 'warn');
+      return;
+    }
+    if (!window.confirm('删除这个元素（含其内部所有内容）并写回源文件？写前会自动备份。')) { return; }
+
+    var da = getDA();
+    var target = {
+      path: da && da.pathOf ? da.pathOf(el) : [],
+      tag: el.tagName.toLowerCase(),
+      id: el.getAttribute('id') || ''
+    };
+
+    var hint = listEl.querySelector('.qhint[data-for="' + a.id + '"]');
+    status('正在删除元素…');
+
+    try {
+      var res = await fetch('/__da__/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page: a.page || state.page, target: target, edits: [{ kind: 'delete' }] })
+      });
+      var out = await res.json();
+      if (res.ok && out.ok) {
+        // 预览立即移除（重载后自然消失）
+        try { el.remove(); } catch (e) { /* ignore */ }
+        a.applied = true;
+        a.deleted = true;
+        status('已删除 ' + (out.page || '') + ' 中的元素（备份：' + (out.backup || '—') + '），等待刷新', 'ok');
+        render();
+        save();
+        return;
+      }
+      var reason = (out && (out.reason || out.error)) || ('HTTP ' + res.status);
+      if (hint) { hint.textContent = '未删除：' + reason; }
+      status('未能删除（' + reason + '）——已记录为建议，agent 会处理', 'warn');
+      a.liveDelete = true;
+      save();
+    } catch (e) {
+      status('删除请求失败：' + ((e && e.message) || e), 'warn');
+    }
+  }
+
   function imageOptions(a) {
     var cur = (a.liveEdits && a.liveEdits.attr && a.liveEdits.attr.src) || a.srcValue || '';
     // 页面里常用绝对路径（/img/x.png），保持同样的写法，避免写入后路径失效
@@ -1646,7 +1704,9 @@
     html += '<div class="qrow">' +
       '<button data-act="write-src" data-id="' + a.id + '"' +
       (canWrite ? '' : ' disabled title="只有服务模式可写源文件"') + '>写入源文件</button>' +
-      (a.applied ? '<span class="qhint">[已写入]</span>' : '') +
+      '<button class="del" data-act="delete-el" data-id="' + a.id + '"' +
+      (canWrite ? '' : ' disabled title="只有服务模式可写源文件"') + '>删除元素</button>' +
+      (a.deleted ? '<span class="qhint">[已删除]</span>' : (a.applied ? '<span class="qhint">[已写入]</span>' : '')) +
       '<span class="qhint" data-for="' + a.id + '"></span>' +
       '</div>';
 
@@ -2157,6 +2217,11 @@
       writeSource(findAnn(id));
       return;
     }
+
+    if (act === 'delete-el') {
+      deleteElement(findAnn(id));
+      return;
+    }
   });
 
   listEl.addEventListener('input', function (e) {
@@ -2231,6 +2296,7 @@
     if (Object.keys(css).length) { sc.css = css; }
     if (le.attr && Object.keys(le.attr).length) { sc.attributes = le.attr; }
     if (le.text != null) { sc.innerHTML = escapeHtml(le.text); }
+    if (a.liveDelete || a.deleted) { sc.delete = true; }
     if (Object.keys(sc).length) { o.suggestedChanges = sc; }
     if (a.applied) { o.appliedToSource = true; }
 
