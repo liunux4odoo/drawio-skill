@@ -89,6 +89,14 @@
   }
   .page-name:empty { display: none; }
   .tabs { display: flex; gap: 4px; margin-bottom: 4px; }
+  .mode-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+  .mode-tabs .tab {
+    background: #2a2a2a; color: var(--dim); border: 1px solid var(--border);
+    border-radius: 3px; font-size: 11px; padding: 3px 10px; cursor: pointer;
+    font-family: inherit; font-weight: 600;
+  }
+  .mode-tabs .tab.active { background: var(--acc); border-color: var(--acc); color: #fff; }
+  .mode-tabs .tab.manual-tab.active { background: #a05; border-color: #a05; }
   .tab {
     background: #333; color: var(--dim); border: 1px solid var(--border);
     border-radius: 3px; font-size: 11px; padding: 2px 8px; cursor: pointer;
@@ -190,6 +198,16 @@
   .mp-sel { font-weight: 400; font-size: 11px; color: var(--dim); margin-left: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
   .mp-body { display: flex; flex-direction: column; gap: 5px; }
   .mp-body .qrow label { min-width: 30px; }
+  .mp-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+  .mp-item {
+    font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #9cdcfe;
+    background: #1e1e1e; border: 1px solid var(--border); border-radius: 3px;
+    padding: 4px 6px; cursor: pointer; word-break: break-all;
+  }
+  .mp-item:hover { border-color: var(--acc); }
+  .mp-item.selected { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); color: #fff; }
+  .mp-item .mp-item-tag { color: #4ec9b0; margin-right: 4px; }
+  .mp-item.stale { color: #e2b93d; text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -227,7 +245,11 @@
   <aside>
     <div class="aside-head">
       <div class="page-name" id="page-name" title="当前标注的页面"></div>
-      <div class="tabs">
+      <div class="mode-tabs">
+        <button class="tab active" data-mode="ai">AI 模式</button>
+        <button class="tab" data-mode="manual">手动模式</button>
+      </div>
+      <div class="tabs" id="status-tabs">
         <button class="tab active" data-tab="active">有效 <span id="cnt-active"></span></button>
         <button class="tab stale-tab" data-tab="stale">已失效 <span id="cnt-stale"></span></button>
       </div>
@@ -544,7 +566,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.9';
+  var VERSION = '0.10';
 
   var frame = document.getElementById('frame');
   var listEl = document.getElementById('list');
@@ -571,6 +593,7 @@
     byPage: {},
     annotations: [],
     tab: 'active',
+    panelMode: 'ai',
     selectedId: null,
     zoomScale: 1,
     mode: false,
@@ -751,6 +774,32 @@
     document.getElementById('cnt-active').textContent = String(activeCount);
     document.getElementById('cnt-stale').textContent = String(staleCount);
 
+    var panel = document.getElementById('manual-panel');
+    var statusTabs = document.getElementById('status-tabs');
+
+    if (state.panelMode === 'manual') {
+      // 手动模式：批注选择列表 + 手动修改面板
+      statusTabs.style.display = 'none';
+      countEl.textContent = String(state.annotations.length);
+      if (!state.annotations.length) {
+        listEl.innerHTML = '<div class="empty">还没有批注。先在右侧页面标注元素，再回到这里手动修改。</div>';
+      } else {
+        listEl.innerHTML = state.annotations.map(function (a, i) {
+          return '<div class="mp-item' + (a.stale ? ' stale' : '') + (state.selectedId === a.id ? ' selected' : '') + '" data-mpid="' + a.id + '">' +
+            '<span class="mp-item-tag">#' + (i + 1) + ' &lt;' + escapeHtml(a.tagName || '?') + '&gt;</span>' +
+            escapeHtml(a.selector || '') +
+          '</div>';
+        }).join('');
+      }
+      panel.hidden = false;
+      renderManualPanel();
+      return;
+    }
+
+    // AI 模式：批注卡片列表（含意见框）
+    statusTabs.style.display = '';
+    panel.hidden = true;
+
     var visible = state.annotations.filter(function (a) {
       return state.tab === 'stale' ? !!a.stale : !a.stale;
     });
@@ -790,7 +839,6 @@
     }).join('');
 
     listEl.innerHTML = html;
-    renderManualPanel();
   }
 
   function findAnn(id) {
@@ -2203,7 +2251,17 @@
     var btn = e.target.closest('.tab');
     if (!btn) { return; }
     state.tab = btn.getAttribute('data-tab') === 'stale' ? 'stale' : 'active';
-    document.querySelectorAll('.aside-head .tab').forEach(function (t) {
+    document.querySelectorAll('.aside-head .tabs .tab').forEach(function (t) {
+      t.classList.toggle('active', t === btn);
+    });
+    render();
+  });
+
+  document.querySelector('.aside-head .mode-tabs').addEventListener('click', function (e) {
+    var btn = e.target.closest('.tab');
+    if (!btn) { return; }
+    state.panelMode = btn.getAttribute('data-mode') === 'manual' ? 'manual' : 'ai';
+    document.querySelectorAll('.aside-head .mode-tabs .tab').forEach(function (t) {
       t.classList.toggle('active', t === btn);
     });
     render();
@@ -2248,6 +2306,16 @@
         return;
       }
 
+      return;
+    }
+
+    // 手动模式的批注选择项
+    var mpItem = e.target.closest('[data-mpid]');
+    if (mpItem) {
+      var mid = mpItem.getAttribute('data-mpid');
+      state.selectedId = (state.selectedId === mid) ? null : mid;
+      render();
+      renderManualPanel();
       return;
     }
 
