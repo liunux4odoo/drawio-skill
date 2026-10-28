@@ -436,6 +436,25 @@ def backup_file(rel: str, full: str) -> str:
     return os.path.relpath(dst, ROOT)
 
 
+# annotator.html 自身携带的识别标记（<head> 里的 meta / 注释），
+# 用于区分「本 skill 的标注页」与用户项目里恰好同名/同名的普通页面
+ANNOTATOR_MARKERS = ("qwenpaw-dom-annotator", "qwenpaw:dom-annotator-tool")
+
+
+def is_annotator_file(path: str) -> bool:
+    """按内容标记判断一个 HTML 文件是否为本 skill 的标注页（只读头部）。"""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(1024)
+    except OSError:
+        return False
+    try:
+        text = head.decode("utf-8", errors="replace").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return any(marker in text for marker in ANNOTATOR_MARKERS)
+
+
 def list_html(root: str) -> list[str]:
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -443,11 +462,12 @@ def list_html(root: str) -> list[str]:
         for fn in filenames:
             if fn.lower().endswith((".html", ".htm", ".xhtml")):
                 rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
-                # 排除标注页自身（按文件名，兼容拷贝副本）：把 skill 目录或含
-                # annotator.html 的目录当目标目录时，避免入口/站内链接加载出
-                # 「annotator 嵌套 annotator」
-                if os.path.basename(fn).lower() == "annotator.html":
-                    continue
+                # 只对文件名疑似标注页的做内容标记验证，避免误伤用户项目里
+                # 恰好叫 annotator.html 的普通页面，也避免读每个文件的开销
+                if "annotator" in os.path.basename(fn).lower():
+                    full = os.path.join(dirpath, fn)
+                    if is_annotator_file(full):
+                        continue
                 out.append(rel)
     out.sort(key=lambda p: (0 if os.path.basename(p).lower().startswith("index.") else 1, p))
     return out
@@ -602,9 +622,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error(403, "forbidden")
             return
         full = os.path.join(ROOT, rel)
-        # 目标目录里若恰好有 annotator.html（把 skill 目录当目标目录，或目录里
-        # 拷贝了标注页副本），静态服务不暴露它，避免 iframe/站内链接加载出嵌套标注页
-        if os.path.basename(full).lower() == "annotator.html":
+        # 目标目录里若恰好有带标记的 annotator.html（把 skill 目录当目标目录，
+        # 或目录里拷贝了标注页副本），静态服务不暴露它，避免嵌套标注页；
+        # 用户项目里同名但无标记的普通页面不受影响
+        if "annotator" in os.path.basename(full).lower() and is_annotator_file(full):
             self._error(404, "not found: %s" % rel)
             return
         if os.path.isdir(full):
