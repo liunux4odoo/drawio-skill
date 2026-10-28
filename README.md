@@ -8,6 +8,15 @@ lives in its own folder under `skills/` following the Agent Skills layout
 
 ```
 skills/
+├── dom-annotator/
+│   ├── SKILL.md              # apply DOM annotations (element-selector feedback) to HTML
+│   ├── annotator.html        # standalone annotation page: load local file / URL, Ctrl+click elements
+│   ├── schema/
+│   │   └── dom-feedback-1.schema.json  # the JSON contract agents read
+│   ├── references/
+│   │   └── usage.md              # how to open the page, transfer feedback, FAQ
+│   └── scripts/
+│       └── serve.py              # one-command launcher: serve dir + watch + write annotations back
 ├── drawio/
 │   ├── SKILL.md              # create/edit draw.io XML diagrams
 │   └── references/
@@ -50,10 +59,72 @@ Each skill lives at `skills/<name>/` following the Agent Skills layout
   (the `references/` and `scripts/` subfolders must travel with `SKILL.md`).
 
 Once installed, just ask in natural language — e.g. *"Create a login flow
-diagram as `login.drawio`"*, *"Write a PDF-ready report in Quarkdown"*, or
+diagram as `login.drawio`"*, *"Write a PDF-ready report in Quarkdown"*,
+*"Apply the annotations in `.dom-annotator/annotations.json`"*, or
 *"Ask the travel assistant what it knows about visa documents."*
 
 ## Skills
+
+### DOM Annotator (`skills/dom-annotator/`)
+
+Lets the user **point at rendered HTML and write change notes**, then hands the
+agent a machine-readable list instead of a screenshot. `annotator.html` is a
+single dependency-free page. Three ways in: **open a whole folder** (CSS,
+images, fonts and plain scripts are inlined so the render matches the browser —
+no server needed), pick a single HTML file, or load a URL. Hold `Ctrl`/`⌘` (or
+toggle annotate mode) and click any element.
+
+On Chromium the folder path uses the File System Access API, so the page
+**re-renders itself when files change on disk** (agent edits → view updates,
+annotations kept, dead selectors flagged `stale`), **writes
+`.dom-annotator/annotations.json` straight into the project**, and remembers the
+last folder across sessions. Firefox/Safari fall back to snapshot mode.
+
+Cleanest flow is one sentence to the agent — *"annotate the pages in `~/site`"* —
+which runs the bundled launcher:
+
+```bash
+python3 scripts/serve.py --dir ~/site      # opens the browser, loads the dir
+```
+
+That serves the folder over `127.0.0.1` (so `type="module"` and page `fetch()`
+work), pushes file changes over SSE, and writes the annotations back on save —
+no permission prompt, no path hunting.
+
+Small deterministic edits skip the agent entirely: select an element, tweak
+colour / font-size / padding / text / image `src` in the side panel, hit
+**write to source**. The launcher rewrites just that byte range in the HTML
+(backup first), and the page re-renders from the file. Anything it can't do
+safely — runtime-generated nodes, text inside an element with children — stays
+in the export as a `suggestedChanges` block for the agent, flagged by the
+absence of `appliedToSource`.
+
+Each annotation records a stable CSS selector, an XPath fallback, the element's
+computed-style snapshot, text/HTML snippets, the user's note, and optional
+`property: value` CSS suggestions.
+
+Sites are usually a set of pages, so folder mode is multi-page: click links
+inside the rendered page (or use the entry dropdown) to move between HTML files,
+and annotations from every page are merged into one export — each tagged with
+its `page` so the agent edits the right file. A viewport dropdown re-renders the
+page at phone / tablet / desktop widths so media queries can be reviewed and
+annotated in place.
+
+Feedback is exported as `dom-feedback-1` JSON. Drop it at
+`<workspace>/.dom-annotator/annotations.json` and tell the agent *"apply the
+annotations"* — no editor integration, no browser extension, no MCP server, no
+pixel coordinates. Clipboard (JSON or Markdown) is the fallback for chat-only
+agents.
+
+```bash
+# Serve the page over HTTP when the target site needs its CSS/assets to load
+cd skills/dom-annotator && python3 -m http.server 8000
+# then open http://localhost:8000/annotator.html
+```
+
+Selector priority: `#id` → `data-testid`/`name`/`aria-label` → unique class
+combination → path with `:nth-of-type`. Annotating against an HTTP-served copy
+(not `file://`) gives the best fidelity.
 
 ### Drawio (`skills/drawio/`)
 

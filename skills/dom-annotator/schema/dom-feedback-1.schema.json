@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://work-skills.local/dom-annotator/dom-feedback-1.schema.json",
+  "title": "DOM Feedback v1",
+  "description": "用户在 annotator.html 中对 HTML 页面元素所做的批注，供 agent 读取并实施修改。",
+  "type": "object",
+  "required": ["schemaVersion", "source", "annotations"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {
+      "const": "dom-feedback-1"
+    },
+    "source": {
+      "type": "string",
+      "description": "当前（导出时正在查看的）页面：本地文件名、目录内相对路径，或页面 URL。"
+    },
+    "sourceType": {
+      "type": "string",
+      "enum": ["file", "url"],
+      "description": "来源类型。file 表示用户从本地文件加载，url 表示通过 URL 加载。"
+    },
+    "pages": {
+      "type": "array",
+      "description": "本次会话中产生过批注的全部页面（目录内相对路径或 URL）。单页面时通常只有一个元素。",
+      "items": { "type": "string" }
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "导出时间（ISO 8601）。"
+    },
+    "viewport": {
+      "type": "object",
+      "description": "导出时目标页面的视口尺寸。",
+      "required": ["width", "height"],
+      "additionalProperties": true,
+      "properties": {
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "devicePixelRatio": { "type": "number" }
+      }
+    },
+    "annotations": {
+      "type": "array",
+      "description": "批注列表，按用户添加顺序排列。",
+      "items": { "$ref": "#/definitions/annotation" }
+    }
+  },
+  "definitions": {
+    "annotation": {
+      "type": "object",
+      "required": ["id", "type", "selector", "text"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "批注唯一标识，仅用于同一文件内引用。"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["style", "layout", "content", "attr", "global"],
+          "description": "修改类型：style=样式；layout=布局/尺寸/位置；content=文案或结构；attr=HTML 属性；global=全局性意见（不绑定具体元素）。"
+        },
+        "page": {
+          "type": "string",
+          "description": "该批注所属页面（目录内相对路径或 URL）。多页面会话中必须以此字段决定改哪个文件；缺失时视为顶层 source。"
+        },
+        "selector": {
+          "type": "string",
+          "description": "CSS 选择器，优先用 id / data-testid / 唯一 class 组合，退化时带 :nth-of-type。"
+        },
+        "xpath": {
+          "type": "string",
+          "description": "备用定位路径。selector 匹配失败时可尝试。"
+        },
+        "tagName": {
+          "type": "string",
+          "description": "元素标签名（小写）。"
+        },
+        "rect": {
+          "type": "object",
+          "description": "标注时元素的可视矩形与页面坐标（像素，整数）。",
+          "additionalProperties": true,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number" },
+            "height": { "type": "number" },
+            "top": { "type": "number" },
+            "left": { "type": "number" },
+            "bottom": { "type": "number" },
+            "right": { "type": "number" },
+            "pageX": { "type": "number" },
+            "pageY": { "type": "number" }
+          }
+        },
+        "computedStyle": {
+          "type": "object",
+          "description": "标注时元素的关键计算样式快照（kebab-case 属性名 → 计算值字符串）。",
+          "additionalProperties": { "type": "string" }
+        },
+        "textSnippet": {
+          "type": "string",
+          "description": "元素文本内容片段（约 160 字以内），用于人工核对定位是否正确。"
+        },
+        "htmlSnippet": {
+          "type": "string",
+          "description": "元素 outerHTML 片段（约 1200 字以内），包含 class/属性信息。"
+        },
+        "text": {
+          "type": "string",
+          "description": "用户填写的修改意见。可能为空字符串——空意见视为「仅定位、无具体修改」，不得据此编造改动。"
+        },
+        "stale": {
+          "type": "boolean",
+          "description": "true 表示页面重载后该 selector 已匹配不到元素（元素被删除或改名）。不要猜测修改目标，应先请用户确认。"
+        },
+        "appliedToSource": {
+          "type": "boolean",
+          "description": "true 表示用户已在标注页里把改动直接写进了源 HTML（内联样式/属性/文本）。agent 不要重复修改，只做验证。"
+        },
+        "suggestedChanges": {
+          "type": "object",
+          "description": "用户在标注页填写的结构化建议（可选）。agent 可直接采用，也可结合上下文调整。",
+          "additionalProperties": false,
+          "properties": {
+            "css": {
+              "type": "object",
+              "description": "建议的 CSS 声明（kebab-case → 值）。",
+              "additionalProperties": { "type": "string" }
+            },
+            "attributes": {
+              "type": "object",
+              "description": "建议设置的 HTML 属性。",
+              "additionalProperties": { "type": "string" }
+            },
+            "innerHTML": {
+              "type": "string",
+              "description": "建议替换的内容片段。"
+            }
+          }
+        }
+      }
+    }
+  }
+}
