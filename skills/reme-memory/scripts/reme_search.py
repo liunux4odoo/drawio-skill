@@ -6,9 +6,9 @@ only the `search` job (no `index_update_loop`), so it never writes to the
 index and starts cold in ~1-2s.
 
 Usage:
-    python qwenpaw_search.py --agent <agent_id> "<query>"
-    python qwenpaw_search.py --agent travel-assistant "签证材料清单"
-    python qwenpaw_search.py --agent QwenPaw_QA_Agent_0.2 --limit 5 "workbuddy"
+    python reme_search.py --agent <agent_id> "<query>"
+    python reme_search.py --agent travel-assistant "签证材料清单"
+    python reme_search.py --agent QwenPaw_QA_Agent_0.2 --limit 5 "workbuddy"
 """
 import argparse
 import asyncio
@@ -43,14 +43,13 @@ def resolve_workspace(root: str, agent_ref: str) -> pathlib.Path:
     raise SystemExit(f"Agent not found: {agent_ref} (under {root})")
 
 
-def build_minimal_config(workspace_dir: str, agent_json_path: pathlib.Path) -> dict:
+def build_minimal_config(workspace_dir: str, mem: dict) -> dict:
     """Replicate get_reme_app_config() without importing qwenpaw.
 
     Only the pieces needed for `search` are kept; background write jobs are
-    omitted so no index writes happen.
+    omitted so no index writes happen. `mem` is the agent's
+    reme_light_memory_config (or a neutral default for project vaults).
     """
-    raw = json.loads(agent_json_path.read_text(encoding="utf-8"))
-    mem = raw["running"]["reme_light_memory_config"]
     emb = mem.get("embedding_model_config", {})
 
     components = {
@@ -130,11 +129,9 @@ def build_minimal_config(workspace_dir: str, agent_json_path: pathlib.Path) -> d
     }
 
 
-async def search(workspace_dir: str, agent_json_path: pathlib.Path,
-                 query: str, limit: int) -> None:
+async def search(workspace_dir: str, cfg: dict, query: str, limit: int) -> None:
     from reme import ReMe
 
-    cfg = build_minimal_config(workspace_dir, agent_json_path)
     app = ReMe(**cfg)
     try:
         await app.start()
@@ -148,16 +145,44 @@ async def search(workspace_dir: str, agent_json_path: pathlib.Path,
         await app.close()
 
 
+def build_project_config(project_dir: str) -> dict:
+    """Read-only config for a project .qwenpaw/ L3 vault (no agent.json)."""
+    vault = pathlib.Path(project_dir).expanduser().resolve() / ".qwenpaw"
+    if not vault.is_dir():
+        raise SystemExit(f"Project vault not found: {vault}")
+    mem = {
+        "metadata_dir": "mem_metadata",
+        "session_dir": "mem_session",
+        "mem_session_dir": "mem_agent",
+        "resource_dir": "resource",
+        "daily_dir": "memory",
+        "digest_dir": "digest",
+        "embedding_model_config": {},
+    }
+    return build_minimal_config(str(vault), mem)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Search a QwenPaw agent's memory")
-    parser.add_argument("--agent", required=True, help="agent id or workspace name")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--agent", help="agent id or workspace name")
+    target.add_argument("--project", help="project directory (search <dir>/.qwenpaw L3 vault)")
     parser.add_argument("query", help="search query")
     parser.add_argument("--root", default=DEFAULT_ROOT, help="workspaces root dir")
     parser.add_argument("--limit", type=int, default=3, help="max results (default 3)")
     args = parser.parse_args()
 
+    if args.project:
+        cfg = build_project_config(args.project)
+        vault = pathlib.Path(args.project).expanduser().resolve() / ".qwenpaw"
+        asyncio.run(search(str(vault), cfg, args.query, args.limit))
+        return
+
     ws = resolve_workspace(args.root, args.agent)
-    asyncio.run(search(str(ws), ws / "agent.json", args.query, args.limit))
+    raw = json.loads((ws / "agent.json").read_text(encoding="utf-8"))
+    mem = raw["running"]["reme_light_memory_config"]
+    cfg = build_minimal_config(str(ws), mem)
+    asyncio.run(search(str(ws), cfg, args.query, args.limit))
 
 
 if __name__ == "__main__":
