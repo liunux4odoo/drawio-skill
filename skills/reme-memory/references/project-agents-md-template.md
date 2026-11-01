@@ -13,6 +13,18 @@ description: Optional snippet to declare the QwenPaw L3 project memory vault (.q
 
 > 注意：QwenPaw 自己的 agent 不读项目根 AGENTS.md（`prompt_contributors.py` 只从 agent workspace 读），这段说明对 QwenPaw agent 只是"可发现"而非"自动加载"；QwenPaw 生态内的发现性由共享规则/各 agent 记忆负责。
 
+## 记忆区分原则（2026-11-01 用户明确）
+
+**默认记忆区包含所有记忆；工作目录若存在 `.qwenpaw/` 子目录，则其中包含项目特定记忆。**
+
+- **默认记忆区** = agent 工作区的 `memory/` + `digest/`（QwenPaw 内置 `memory_search` 的检索范围）。**所有记忆都在这里**：agent 自身长期记忆、用户偏好、一般性项目知识。
+- **项目特定记忆** = 会话绑定的工作目录（project_dirs）下若存在 `<项目>/.qwenpaw/` 子目录，其 `memory/`、`digest/`、`mem_metadata/` 是该项目专属的记忆库（多 agent 共享）。
+- **检索决策顺序**：
+  1. `memory_search` —— 默认记忆区，覆盖所有记忆，永远第一优先；
+  2. 当前工作目录有 `.qwenpaw/` → `reme_search.py --project <工作目录>` 查项目特定记忆；
+  3. 前两步无果，才用 `--agent <id>` 跨 agent 外求其他智能体的经验。
+- **写入同理**：项目特定结论写 `<项目>/.qwenpaw/`（`--project`），个人观察写自己工作区（`--agent`）。
+
 ## 使用方式
 
 用户明确要求时（例如「让其他 agent 也能看到项目记忆」「在项目 AGENTS.md 里说明 .qwenpaw」），将以下片段追加到**项目根目录**的 `AGENTS.md`（不是 agent workspace 的 AGENTS.md）：
@@ -20,12 +32,17 @@ description: Optional snippet to declare the QwenPaw L3 project memory vault (.q
 ```markdown
 ## QwenPaw project memory
 This project keeps a QwenPaw L3 memory vault at `.qwenpaw/`:
-- `.qwenpaw/memory/notes/` — topic notes (canonical project facts)
+- `.qwenpaw/memory/notes/` — topic notes (canonical project facts; project-specific only)
 - `.qwenpaw/digest/` — long-term digested knowledge (if present)
 - `.qwenpaw/mem_metadata/` — search index (regenerate; do not edit)
 
 Read them as plain markdown. Agents with the reme-memory skill can search/write
 via `reme_search.py --project <dir>` / `reme_write.py --project <dir>`.
+
+Memory separation: the agent's own workspace memory (memory_search) holds ALL
+memories (agent history, preferences, general project knowledge); `.qwenpaw/`
+holds only project-specific facts shared across agents. Check the workspace
+memory first, then the project vault.
 ```
 
 ## 注意事项
@@ -33,3 +50,4 @@ via `reme_search.py --project <dir>` / `reme_write.py --project <dir>`.
 - **默认不自动写**：项目根 AGENTS.md 是用户的项目资产，可能由团队维护、有自己的约定；`.qwenpaw/` 是 QwenPaw 实现细节，默认写入等于强加依赖。只在用户要求时写入。
 - **位置是项目根目录**，不是 agent workspace。
 - **可逆**：不需要时删除该片段即可，不影响 `.qwenpaw/` 本身。
+- **区分原则**：模板片段体现了「默认记忆区 = 所有记忆 / `.qwenpaw/` = 项目特定记忆」的边界，避免其他工具误把项目记忆当作全量记忆。

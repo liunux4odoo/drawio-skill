@@ -1,6 +1,6 @@
 ---
 name: reme-memory
-description: Query QwenPaw agents' accumulated experience and memory, and write project/agent memory notes into ReMe vaults. Use when the task needs historical decisions, lessons learned, domain notes, or personal preferences recorded by any QwenPaw agent (e.g. a travel assistant, developer, QA helper), or when you want to persist a durable note into an agent's workspace memory or a project-level memory vault (<project>/.qwenpaw). First locate the right agent with scripts/reme_agents.py, then search its memory with scripts/reme_search.py --agent <id> "<query>" (or --project <dir> for a project vault). Writes go through scripts/reme_write.py, which uses a writable ReMe instance so frontmatter/atomic-write/indexing match QwenPaw's own memory writer.
+description: Query QwenPaw agents' accumulated experience and memory, and write project/agent memory notes into ReMe vaults. Use when the task needs historical decisions, lessons learned, domain notes, or personal preferences recorded by any QwenPaw agent (e.g. a travel assistant, developer, QA helper), or when you want to persist a durable note into an agent's workspace memory or a project-level memory vault (<project>/.qwenpaw). First locate the right agent with scripts/qwenpaw_agents.py, then search its memory with scripts/reme_search.py --agent <id> "<query>" (or --project <dir> for a project vault). Writes go through scripts/reme_write.py, which uses a writable ReMe instance so frontmatter/atomic-write/indexing match QwenPaw's own memory writer.
 ---
 
 # QwenPaw Agent Memory Query & Write
@@ -11,6 +11,18 @@ A **project** may also have its own L3 memory vault at `<project>/.qwenpaw/` (me
 
 Memory is **per-agent or per-project**. Always resolve which target you mean before searching or writing.
 
+## 记忆区分原则（2026-11-01 用户明确）
+
+**默认记忆区包含所有记忆；工作目录若存在 `.qwenpaw/` 子目录，则其中包含项目特定记忆。**
+
+- **默认记忆区** = agent 工作区的 `memory/` + `digest/`（QwenPaw 内置 `memory_search` 的检索范围）。**所有记忆都在这里**：agent 自身长期记忆、用户偏好、一般性项目知识。
+- **项目特定记忆** = 会话绑定的工作目录（project_dirs）下若存在 `<项目>/.qwenpaw/` 子目录，其 `memory/`、`digest/`、`mem_metadata/` 是该项目专属的记忆库（多 agent 共享）。
+- **检索决策顺序**：
+  1. `memory_search` —— 默认记忆区，覆盖所有记忆，永远第一优先；
+  2. 当前工作目录有 `.qwenpaw/` → `reme_search.py --project <工作目录>` 查项目特定记忆；
+  3. 前两步无果，才用 `--agent <id>` 跨 agent 外求其他智能体的经验。
+- **写入同理**：项目特定结论写 `<项目>/.qwenpaw/`（`--project`），个人观察写自己工作区（`--agent`）。
+
 ## When to use
 
 - **Search**: a task needs historical decisions, lessons learned, domain knowledge, or user preferences that may have been recorded by a QwenPaw agent, or by a project vault.
@@ -20,8 +32,8 @@ Memory is **per-agent or per-project**. Always resolve which target you mean bef
 
 1. **Locate the agent** (if not already known):
    ```bash
-   python3 scripts/reme_agents.py                 # list all agents + memory size
-   python3 scripts/reme_agents.py <keyword>       # find by id/name/description
+   python3 scripts/qwenpaw_agents.py            # list all agents + memory size
+   python3 scripts/qwenpaw_agents.py <keyword>  # find by id/name/description
    ```
    Choose the agent whose domain matches the query. If several match, prefer the one with larger memory, or ask the user.
 
@@ -72,7 +84,7 @@ python3 scripts/reme_write.py --project <project_dir> \
 
 | Script | Purpose |
 |---|---|
-| `scripts/reme_agents.py` | List/find QwenPaw agents (id, name, description, memory size). `--json` for machine-readable output, `--root` to override workspaces root. |
+| `scripts/qwenpaw_agents.py` | List/find QwenPaw agents (id, name, description, memory size). `--json` for machine-readable output, `--root` to override workspaces root. |
 | `scripts/reme_search.py` | Search a ReMe memory index. `--agent <id>` or `--project <dir>` (required); `--root` overrides workspaces root; `--limit N` caps results. Read-only. |
 | `scripts/reme_write.py` | Write a note into an agent workspace (`--agent`) or project vault (`--project`). Writable ReMe instance: frontmatter, atomic write, ingest, reindex. `--no-index` skips indexing. |
 

@@ -4,9 +4,9 @@ Pure stdlib; no qwenpaw import. Reads each workspace's agent.json for
 metadata and memory size.
 
 Usage:
-    python reme_agents.py                      # list all
-    python reme_agents.py <keyword>            # find by id/name/description
-    python reme_agents.py --json <keyword>?    # machine-readable output
+    python qwenpaw_agents.py                   # list all
+    python qwenpaw_agents.py <keyword>         # find by id/name/description
+    python qwenpaw_agents.py --json <keyword>? # machine-readable output
 """
 import argparse
 import json
